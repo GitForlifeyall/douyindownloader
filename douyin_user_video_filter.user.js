@@ -396,12 +396,10 @@
 
     function init() {
         createUI();
-        // Auto-scroll to end of page, then compute the qualified list & URLs
-        setTimeout(() => {
-            autoScrollToEnd();
-            startObserving();
-        }, 2000);
-        // Re-scan every few seconds to catch newly loaded cards while scrolling
+        // Do NOT auto-scroll on load — that can hang the page.
+        // Click the "Scroll to End & Filter" button manually when you want to scroll.
+        startObserving();
+        // Re-scan every few seconds to catch newly loaded cards
         setInterval(scanVideos, 5000);
     }
 
