@@ -1266,10 +1266,71 @@ class DubbingPipeline:
         self._setup_output_dirs(original_base_output)
         return results
 
+    def run_profile(
+        self,
+        profile_url: str,
+        target_lang: str = "Hindi",
+        voice: Optional[str] = None,
+        base_speed: float = 1.0,
+        batch_size: int = 35,
+        force: bool = False,
+        dub_mode: str = "block_aligned",
+        preserve_bgm: bool = True,
+        clean_subtitles: bool = True,
+        remove_watermark: bool = False,
+        bgm_volume: float = 1.05,
+        enable_metadata: bool = True,
+        style: str = "viral",
+        fit_short: bool = False,
+        max_duration: float = 58.0,
+        max_videos: Optional[int] = None,
+        sort_by: str = "popularity"
+    ) -> Dict[str, Any]:
+        """
+        Download all videos from a Douyin user profile / channel URL into input/<channel_name>
+        and automatically process every video through the full dubbing pipeline.
+        """
+        print("\n" + "=" * 65)
+        print(" [Dubbing Studio] AUTO-DOWNLOADING DOUYIN PROFILE & BATCH PROCESSING")
+        print(f" Profile URL : {profile_url}")
+        print(f" Max Videos  : {max_videos or 'All'}")
+        print(f" Sort By     : {sort_by}")
+        print("=" * 65)
+
+        channel_folder = self.downloader.download_channel(
+            channel_url=profile_url,
+            output_dir=self.input_dir,
+            max_videos=max_videos,
+            sort_by=sort_by
+        )
+
+        return self.run_folder(
+            folder_path=channel_folder,
+            target_lang=target_lang,
+            voice=voice,
+            base_speed=base_speed,
+            batch_size=batch_size,
+            force=force,
+            dub_mode=dub_mode,
+            preserve_bgm=preserve_bgm,
+            clean_subtitles=clean_subtitles,
+            remove_watermark=remove_watermark,
+            bgm_volume=bgm_volume,
+            enable_metadata=enable_metadata,
+            style=style,
+            fit_short=fit_short,
+            max_duration=max_duration
+        )
+
+    run_channel = run_profile
+
 
 def main():
     parser = argparse.ArgumentParser(description="Douyin / TikTok Automated Dubbing Studio Pipeline")
     parser.add_argument("--url", type=str, default="", help="Douyin/TikTok video URL, path to local MP4, or folder")
+    parser.add_argument("--profile", "--channel", "--profile-url", "--channel-url", type=str, default="", help="Douyin user profile or channel URL to auto-download and process all videos")
+    parser.add_argument("--max-videos", type=int, default=None, help="Maximum number of videos to download from profile (default: None for all available)")
+    parser.add_argument("--sort-by", type=str, default="popularity", choices=["popularity", "popular", "likes", "date", "latest"], help="Sort profile videos by popularity or date (default: popularity)")
     parser.add_argument("--folder", "--input-dir", type=str, default="", help="Directory containing videos or subfolders of videos to batch process")
     parser.add_argument("--reorganize", action="store_true", help="Reorganize and de-clutter existing output files into dedicated subfolders")
     parser.add_argument("--lang", type=str, default="Hindi", help="Target language (default: Hindi in native Devanagari for TTS, mapped to Roman Hinglish captions)")
@@ -1304,7 +1365,6 @@ def main():
             args.voice = "roger"
         elif args.tts in ("google", "gemini"):
             args.voice = "Ludo"
-
         elif args.tts in ("sarvam", "bulbul"):
             args.voice = "shubh"
 
@@ -1312,26 +1372,37 @@ def main():
     in_folder = Path(args.input_dir) if getattr(args, "input_dir", None) else None
     pipeline = DubbingPipeline(input_dir=in_folder, output_dir=out_folder, gemini_model=args.model, tts_engine=args.tts)
 
-
     if args.reorganize:
         pipeline.reorganize_existing_output()
         print("[Pipeline] Reorganization complete!")
-        if not (args.url or args.folder):
+        if not (args.profile or args.url or args.folder):
             return
 
-    input_target = args.folder or args.url
+    input_profile = args.profile.strip()
+    input_target = input_profile or args.folder or args.url
     if not input_target:
-        parser.error("Please provide either --url or --folder")
+        parser.error("Please provide either --profile (Douyin profile URL), --url (video URL/file), or --folder")
 
     target_path = Path(input_target)
-    is_url = bool(args.url) or input_target.lower().startswith("http://") or input_target.lower().startswith("https://")
-    is_folder_input = (not is_url) and (
+    is_url = bool(args.url or input_profile) or input_target.lower().startswith("http://") or input_target.lower().startswith("https://")
+    
+    # Check if input is a Douyin profile URL
+    is_profile_input = bool(input_profile) or (
+        is_url and (
+            "/user/" in input_target.lower()
+            or "sec_user_id" in input_target.lower()
+            or "from_tab_name" in input_target.lower()
+        )
+    )
+
+    is_folder_input = (not is_url) and (not is_profile_input) and (
         bool(args.folder)
         or ("?" in input_target)
         or ("*" in input_target)
         or (target_path.exists() and target_path.is_dir())
         or (not target_path.suffix)
     )
+
     should_gen_meta = not args.no_metadata
     if args.block_aligned:
         selected_dub_mode = "block_aligned"
@@ -1344,7 +1415,28 @@ def main():
     is_short = bool(args.short)
     max_dur = float(args.max_duration)
 
-    if is_folder_input:
+    if is_profile_input:
+        profile_url = input_profile or input_target
+        pipeline.run_profile(
+            profile_url=profile_url,
+            target_lang=args.lang,
+            voice=args.voice if args.voice else None,
+            base_speed=args.speed,
+            batch_size=args.batch_size,
+            force=args.force,
+            dub_mode=selected_dub_mode,
+            preserve_bgm=not args.no_bgm,
+            clean_subtitles=not args.no_clean,
+            remove_watermark=args.include_watermark,
+            bgm_volume=args.bgm_volume,
+            enable_metadata=should_gen_meta,
+            style=selected_style,
+            fit_short=is_short,
+            max_duration=max_dur,
+            max_videos=args.max_videos,
+            sort_by=args.sort_by
+        )
+    elif is_folder_input:
         pipeline.run_folder(
             folder_path=target_path,
             target_lang=args.lang,

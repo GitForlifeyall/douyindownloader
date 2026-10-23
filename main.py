@@ -15,6 +15,12 @@ Features:
   - Continuous, syllable-accurate ASS subtitle burning
 
 Usage:
+  # Auto-download an entire Douyin profile and process all videos:
+  python main.py --profile "https://www.douyin.com/user/MS4wLjABAAAA..."
+
+  # Download top 10 most popular videos from a profile:
+  python main.py --profile "https://www.douyin.com/user/MS4wLjABAAAA..." --max-videos 10 --sort-by popularity
+
   # Dub a Douyin URL directly (saves raw to input/, dubbed to output/):
   python main.py --url "https://v.douyin.com/..."
 
