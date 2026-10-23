@@ -1201,6 +1201,8 @@ class DubbingPipeline:
 
                 video_title = meta.get("title", Path(r["final_video"]).stem)
                 video_desc = meta.get("description", "")
+                if len(video_desc) >= 5000:
+                    video_desc = video_desc[:4950].rsplit(",", 1)[0].rstrip()
                 seo_tags = clean_youtube_tags(meta.get("tags"), title=video_title)
 
                 master_videos_list.append({

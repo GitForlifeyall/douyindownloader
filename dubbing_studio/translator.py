@@ -623,6 +623,15 @@ class SRTDubTranslator:
         if COPYRIGHT_DISCLAIMER not in description:
             description = (description + "\n\n" + COPYRIGHT_DISCLAIMER).strip()
 
+        if len(description) >= 5000:
+            if COPYRIGHT_DISCLAIMER in description:
+                kw_part = description.replace(COPYRIGHT_DISCLAIMER, "").rstrip()
+                avail = max(100, 4950 - len(COPYRIGHT_DISCLAIMER) - 4)
+                kw_part = kw_part[:avail].rsplit(",", 1)[0].rstrip()
+                description = f"{kw_part}\n\n{COPYRIGHT_DISCLAIMER}".strip()
+            else:
+                description = description[:4950].rsplit(",", 1)[0].rstrip()
+
         raw_tags = data.get("tags") or []
         if isinstance(raw_tags, str):
             tags = [t.strip().lstrip("#") for t in raw_tags.split(",") if t.strip()]
