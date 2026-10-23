@@ -1,0 +1,3 @@
+# DBS-TIGER-DnR benchmark environment (Python 3.11+ only).
+# Installed from the official upstream source archive to avoid local Git hooks.
+https://github.com/JusperLee/Dynamic-Band-Splitting/archive/refs/heads/main.zip

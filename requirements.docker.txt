@@ -1,0 +1,34 @@
+# Core Cloud Run Web & API
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+pydantic>=2.7.0
+aiofiles>=24.1.0
+httpx>=0.27.0
+requests>=2.31.0
+
+# Google Cloud & Google Drive Integration
+google-api-python-client>=2.150.0
+google-auth>=2.35.0
+google-auth-httplib2>=0.2.0
+google-auth-oauthlib>=1.2.1
+
+# AI & Translation APIs
+google-genai>=0.1.0
+sarvamai>=0.1.37
+
+# Audio & Speech AI
+faster-whisper>=1.0.0
+demucs>=4.0.1
+soundfile>=0.12.1
+numpy<2.0.0
+
+# Video Subtitle Removal & Computer Vision
+opencv-python-headless>=4.10.0.84
+scikit-image>=0.24.0
+einops>=0.8.0
+filesplit>=3.0.2
+Pillow>=10.4.0
+scipy>=1.13.0
+tqdm>=4.66.5
+paddleocr>=2.7.0
+paddlepaddle>=2.6.0

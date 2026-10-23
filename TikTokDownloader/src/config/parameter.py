@@ -364,17 +364,12 @@ class Parameter:
         return {}
 
     async def __get_tt_wid_params_tiktok(self) -> dict:
+        fallback_val = self.cookie_dict_tiktok.get(TtWidTikTok.NAME, '') or self.get_cookie_value(self.cookie_str_tiktok, TtWidTikTok.NAME)
+        twc_val = self.twc_tiktok or f"{TtWidTikTok.NAME}={fallback_val}"
         if tt_wid := await TtWidTikTok.get_tt_wid(
             self.logger,
             self.headers_params_tiktok,
-            self.twc_tiktok
-            or f"{TtWidTikTok.NAME}={
-                self.cookie_dict_tiktok.get(TtWidTikTok.NAME, '')
-                or self.get_cookie_value(
-                    self.cookie_str_tiktok,
-                    TtWidTikTok.NAME,
-                )
-            }",
+            twc_val,
             proxy=self.proxy_tiktok,
         ):
             self.logger.info(

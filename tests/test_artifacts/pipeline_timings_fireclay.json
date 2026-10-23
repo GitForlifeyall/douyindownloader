@@ -1,0 +1,11 @@
+{
+  "step1_download": 16.83,
+  "step2_transcribe": 11.21,
+  "step3_translate": 60.0,
+  "step4_stem_separation": 52.63,
+  "step5_clean_video_blur": 60.9,
+  "step6_sarvam_tts": 20.94,
+  "step7_align_and_subtitles": 15.85,
+  "step8_final_render": 8.4,
+  "total_end_to_end": 246.76
+}

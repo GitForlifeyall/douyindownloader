@@ -41,9 +41,10 @@ class FFMPEG:
 
     @staticmethod
     def generate_command_darwin(command: list) -> None:
+        escaped_cmd = " ".join(command).replace('"', '\\"')
         script = dedent(f"""
                 tell application "Terminal"
-                    do script "{" ".join(command).replace('"', '\\"')}"
+                    do script "{escaped_cmd}"
                     activate
                 end tell
                 """)

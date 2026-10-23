@@ -19,7 +19,14 @@ class ColorfulConsole(Console):
         self.debug_mode = debug
 
     def print(self, *args, style=GENERAL, highlight=False, **kwargs):
-        super().print(*args, style=style, highlight=highlight, **kwargs)
+        try:
+            super().print(*args, style=style, highlight=highlight, **kwargs)
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            try:
+                msg = " ".join(str(a) for a in args)
+                sys.stdout.write(msg.encode(sys.stdout.encoding or "utf-8", "replace").decode(sys.stdout.encoding or "utf-8") + "\n")
+            except Exception:
+                pass
 
     def info(self, *args, highlight=False, **kwargs):
         self.print(*args, style=INFO, highlight=highlight, **kwargs)

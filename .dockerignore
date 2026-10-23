@@ -1,0 +1,42 @@
+# Git & IDE
+.git
+.git/**
+.gitignore
+.idea
+.idea/**
+.vscode
+.vscode/**
+__pycache__
+**/__pycache__
+**/__pycache__/**
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual Environments
+.venv
+.venv/**
+*/.venv
+*/.venv/**
+TikTokDownloader/.venv
+TikTokDownloader/.venv/**
+**/.venv
+**/.venv/**
+
+# Local Outputs & Data
+output
+output/**
+*/Volume/Download
+*/Volume/Download/**
+TikTokDownloader/Volume/Download
+TikTokDownloader/Volume/Download/**
+stems_*
+stems_*/**
+*.mp4
+*.wav
+*.mp3
+*.srt
+
+# System files
+.DS_Store
+Thumbs.db

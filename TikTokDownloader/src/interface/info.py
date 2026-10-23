@@ -67,7 +67,8 @@ class Info(API):
     ) -> dict:
         if isinstance(self.sec_user_id, str):
             self.sec_user_id = [self.sec_user_id]
-        value = f"[{','.join(f'"{i}"' for i in self.sec_user_id)}]"
+        joined_ids = ",".join(f'"{i}"' for i in self.sec_user_id)
+        value = f"[{joined_ids}]"
         return {
             "sec_user_ids": value,
         }
