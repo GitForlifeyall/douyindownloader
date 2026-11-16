@@ -117,7 +117,7 @@ def main():
                 output_path=str(cache_file),
                 speaker="shubh",
                 pace=safe_pace,
-                model="bulbul:v3"
+                model="bulbul:v4-flash"
             )
 
         raw_audio, sr = sf.read(str(cache_file))

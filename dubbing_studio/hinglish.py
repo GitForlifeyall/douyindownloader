@@ -102,7 +102,8 @@ COMMON_WORDS: Dict[str, str] = {
     "सारे": "saare", "एक्स्ट्रा": "extra", "पार्टिकल्स": "particles", "छांव": "chhaanv", "धूप": "dhoop",
     "सॉलिड": "solid", "फॉर्म": "form", "ब्लॉक": "block", "शीया": "shea", "बटर": "butter", "वैक्स": "wax",
     "हीट": "heat", "मिक्सचर": "mixture", "आपस": "aapas", "पूरी": "poori", "पूरा": "poora", "तरह": "tarah",
-    "पेस्ट": "paste", "मोलड": "mold", "मोल्ड": "mold", "डीमोल्ड": "demold", "इंग्रीडिएंट्स": "ingredients",
+    "पेस्ट": "paste", "मोलड": "mold", "मोल्ड": "mold", "मोल्डी": "moldy", "मोल्دي": "moldy", "लोز": "lohe", "डीमोल्ड": "demold", "इंग्रीडिएंट्स": "ingredients",
+    "सूअर": "suar", "सूअर": "suar", "जंगली": "jangli",
     "स्किन": "skin", "काफी": "kaafi", "सेफ": "safe", "प्रोसेस": "process", "एडवांस": "advance",
     "आज": "aaj", "सिर्फ": "sirf", "लुक": "look", "बल्कि": "balki", "होंठों": "honthon", "होंठ": "honth",
     "मॉइस्ट": "moist", "हुए": "hue", "इसके": "iske", "इसमें": "ismein", "फिर": "phir", "थोड़ा": "thoda",
@@ -211,6 +212,17 @@ FALLBACK_DEVANAGARI_TO_LATIN = {
     '\u094d': '', '\u0901': 'n', '\u0902': 'n', '\u0903': 'h', '\u093c': ''
 }
 
+# Arabic/Urdu script fallback mapping: ensures stray Perso-Arabic unicode characters NEVER leak into subtitles
+ARABIC_URDU_MAP = {
+    'ا': 'a', 'آ': 'aa', 'ب': 'b', 'پ': 'p', 'ت': 't', 'ٹ': 't', 'ث': 's',
+    'ج': 'j', 'چ': 'ch', 'ح': 'h', 'خ': 'kh', 'د': 'd', 'ڈ': 'd', 'ذ': 'z',
+    'ر': 'r', 'ڑ': 'd', 'ز': 'z', 'ژ': 'zh', 'س': 's', 'श': 'sh', 'ص': 's',
+    'ض': 'z', 'ط': 't', 'ظ': 'z', 'ع': 'a', 'غ': 'gh', 'ف': 'f', 'ق': 'q',
+    'ک': 'k', 'گ': 'g', 'ل': 'l', 'م': 'm', 'ن': 'n', 'ں': 'n', 'و': 'o',
+    'ہ': 'h', 'ۂ': 'h', 'ۃ': 'h', 'ھ': 'h', 'ء': '', 'ی': 'i', 'ي': 'i',
+    'ے': 'e', 'ئ': 'i', 'ؤ': 'o', 'لا': 'la'
+}
+
 
 def _split_punctuation(token: str) -> Tuple[str, str, str]:
     """Separates punctuation, symbols, and Devanagari danda from the core word."""
@@ -276,6 +288,10 @@ def _phonetic_fallback(word: str) -> str:
             out.append(MATRA_MAP[c])
         elif c in FALLBACK_DEVANAGARI_TO_LATIN:
             out.append(FALLBACK_DEVANAGARI_TO_LATIN[c])
+        elif c in ARABIC_URDU_MAP:
+            out.append(ARABIC_URDU_MAP[c])
+        elif '\u0600' <= c <= '\u06FF':
+            out.append(ARABIC_URDU_MAP.get(c, ''))
         else:
             out.append(c)
         i += 1
@@ -299,7 +315,7 @@ def word_to_hinglish(word: str) -> str:
     # Map punctuation: replace Devanagari danda with period or exclamation
     p_trail = p_trail.replace('।', '.').replace('॥', '.')
 
-    # 0. If already English / Latin script, preserve exact spelling and casing!
+    # 0. If already English / Latin script (and no Arabic/Urdu), preserve exact spelling and casing!
     if all(ord(c) < 128 for c in core):
         return f"{p_lead}{core}{p_trail}"
 
@@ -337,12 +353,14 @@ def text_to_hinglish(text: str) -> str:
         converted = [word_to_hinglish(w) for w in words]
         processed_line = " ".join(converted)
 
-        # Zero-Tolerance Guarantee: Eliminate any residual Devanagari codepoints
-        if re.search(r'[\u0900-\u097F]', processed_line):
+        # Zero-Tolerance Guarantee: Eliminate any residual Devanagari or Arabic/Urdu codepoints
+        if re.search(r'[\u0900-\u097F\u0600-\u06FF]', processed_line):
             cleaned = []
             for ch in processed_line:
                 if '\u0900' <= ch <= '\u097F':
                     cleaned.append(FALLBACK_DEVANAGARI_TO_LATIN.get(ch, ''))
+                elif '\u0600' <= ch <= '\u06FF':
+                    cleaned.append(ARABIC_URDU_MAP.get(ch, ''))
                 else:
                     cleaned.append(ch)
             processed_line = re.sub(r' +', ' ', ''.join(cleaned))

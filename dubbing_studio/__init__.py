@@ -31,6 +31,11 @@ from .tts_google import GoogleGeminiTTS
 from .tts_elevenlabs import ElevenLabsTTS
 from .tts_omnivoice import OmniVoiceTTS
 from .separator import AudioStemSeparator
+from .anti_accent import (
+    balance_consecutive_english,
+    count_syllables,
+    english_to_devanagari,
+)
 
 
 def __getattr__(name: str):

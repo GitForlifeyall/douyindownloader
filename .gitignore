@@ -21,3 +21,9 @@ video-subtitle-remover-main/
 *.zip
 *.tar.gz
 !run.bat
+profiles metricool/
+**/profiles metricool/
+*metricool*.json
+*exhausted*keys*.json
+tests/test_artifacts/
+

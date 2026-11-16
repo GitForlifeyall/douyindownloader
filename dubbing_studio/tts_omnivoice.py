@@ -175,7 +175,9 @@ class OmniVoiceTTS:
             return self.anchors[voice_key]
 
         project_root = Path(__file__).resolve().parent.parent
-        ref_speaker = project_root / "reference_speaker.wav"
+        ref_speaker = project_root / "assets" / "voices" / "reference_speaker.wav"
+        if not ref_speaker.exists():
+            ref_speaker = project_root / "reference_speaker.wav"
 
         anchor_map = {
             "male_deep": (
@@ -215,6 +217,10 @@ class OmniVoiceTTS:
         if cache_path and cache_path.exists() and cache_path.stat().st_size > 500:
             data, sr = sf.read(str(cache_path))
             return data, sr
+
+        from .tts_google import extract_audio_tags_and_clean_text
+        spoken_text, _ = extract_audio_tags_and_clean_text(text)
+        text = spoken_text or text
 
         voice_key = self._resolve_voice_key(voice)
         preset = VOICE_PRESETS.get(voice_key, VOICE_PRESETS["male_deep"])

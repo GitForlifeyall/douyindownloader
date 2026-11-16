@@ -94,9 +94,9 @@ def srt_to_ass(
                 try:
                     data = json.loads(c.read_text(encoding="utf-8"))
                     if "y_center" in data:
-                        margin_v = max(180, target_h - int(data["y_center"]) - 65)
+                        margin_v = max(80, target_h - int(data["y_center"]) - 65)
                     else:
-                        margin_v = max(180, int(data.get("margin_v", 405)) - 30)
+                        margin_v = max(80, int(data.get("margin_v", 405)) - 30)
                     print(f"[srt_to_ass] Dynamic MarginV={margin_v} loaded from {c.name}")
                     break
                 except Exception:

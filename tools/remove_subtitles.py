@@ -3,16 +3,9 @@
 """
 remove_subtitles.py
 ===================
-Integrated Luminance-Suppressed Subtitle Cleaner for the Douyin Dubbing Pipeline.
-Replaces the legacy STTN/LaMA inpainting models with the high-speed, anti-glitch
-Clause-Sampled RapidOCR Luminance Blur pipeline.
-
-Features:
-- Visual clause splitting (0% missing edges)
-- Luminance suppression (0% white foggy ghosting)
-- Minimum safety width & generous margins (0% split-second flash)
-- Persistent on-screen blur
-- NVDEC/NVENC GPU acceleration (50-70+ FPS)
+Integrated Per-Subtitle Tight RapidOCR Luminance Blur for the Douyin Dubbing Pipeline.
+Detects each individual subtitle interval via change-triggered 4fps RapidOCR and applies
+tight per-line rounded-capsule blurring with luminance & outline suppression.
 """
 
 import os
@@ -48,7 +41,7 @@ def remove_subtitles(
         out_path = Path(output_video).resolve()
 
     try:
-        print(f"\n[Video Cleaner] Applying Luminance-Suppressed Subtitle Blur...")
+        print(f"\n[Video Cleaner] Applying Tight Per-Subtitle RapidOCR Blur...")
         print(f"  Input : {in_path.name}")
         print(f"  Output: {out_path.name}")
         

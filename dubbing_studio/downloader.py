@@ -11,7 +11,7 @@ without polluting custom pipeline code.
 import sys
 import asyncio
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional, Union, Dict, Any, List
 
 # Ensure runtime environment is configured
 from .env_loader import configure_runtime_environment
@@ -39,6 +39,69 @@ class DownloaderAPI:
         src_dir = self.base_dir / "src"
         if src_dir.exists() and str(src_dir) not in sys.path:
             sys.path.insert(0, str(src_dir))
+
+    @staticmethod
+    def _parse_duration_sec(raw_val: Any) -> Optional[float]:
+        """Parse metadata duration ('HH:MM:SS', 'MM:SS', numeric seconds or ms) into seconds."""
+        if raw_val is None or raw_val == "":
+            return None
+        if isinstance(raw_val, (int, float)):
+            val = float(raw_val)
+            return (val / 1000.0) if val > 7200 else val
+        s = str(raw_val).strip()
+        if ":" in s:
+            try:
+                parts = [float(p) for p in s.split(":")]
+                if len(parts) == 3:
+                    return parts[0] * 3600.0 + parts[1] * 60.0 + parts[2]
+                if len(parts) == 2:
+                    return parts[0] * 60.0 + parts[1]
+            except Exception:
+                return None
+        try:
+            val = float(s)
+            return (val / 1000.0) if val > 7200 else val
+        except Exception:
+            return None
+
+    def probe_video_duration(self, url: str) -> Optional[float]:
+        """Check Douyin/TikTok video duration in seconds BEFORE downloading media bytes."""
+        local_candidate = Path(url)
+        if local_candidate.exists() and local_candidate.is_file():
+            return None
+        from src.application import TikTokDownloader
+        from src.interface import Detail, DetailTikTok
+        from src.link import Extractor, ExtractorTikTok
+        from src.extract import Extractor as DataExtractor
+        from src.storage import RecordManager
+
+        async def _async_probe(target_url: str) -> Optional[float]:
+            is_tiktok = "tiktok.com" in target_url.lower()
+            async with TikTokDownloader() as app:
+                app.check_config()
+                await app.check_settings(False)
+                link_extractor = ExtractorTikTok(app.parameter) if is_tiktok else Extractor(app.parameter)
+                ids = await link_extractor.run(target_url, type_="detail")
+                if not ids:
+                    return None
+                detail_obj = (DetailTikTok if is_tiktok else Detail)(app.parameter, detail_id=ids[0])
+                detail_data = await detail_obj.run()
+                if not detail_data:
+                    return None
+                rm = RecordManager()
+                root, params, logger_cls = rm.run(app.parameter)
+                data_extractor = DataExtractor(app.parameter)
+                async with logger_cls(root, console=app.console, **params) as record:
+                    extracted_info = await data_extractor.run([detail_data], record, tiktok=is_tiktok)
+                    if not extracted_info:
+                        return None
+                    return self._parse_duration_sec(extracted_info[0].get("duration"))
+
+        try:
+            return asyncio.run(_async_probe(url))
+        except Exception as e:
+            print(f"[DownloaderAPI] Pre-download duration probe skipped ({e})")
+            return None
 
     def download_video(self, url: str, output_dir: Optional[Union[str, Path]] = None) -> Path:
         """
@@ -109,29 +172,61 @@ class DownloaderAPI:
                     extracted_info = await data_extractor.run([detail_data], record, tiktok=is_tiktok)
                     if not extracted_info:
                         raise RuntimeError("Failed to extract downloadable video stream.")
-                    desc = extracted_info[0].get("desc", "video")
-                    print(f"[DownloaderAPI] Starting download: {desc}")
-                    await downloader.run(extracted_info, "detail", tiktok=is_tiktok)
+                    info = extracted_info[0]
+                    desc = info.get("desc", "video")
+                    create_time = str(info.get("create_time", "")).replace(":", ".")
+                    nickname = str(info.get("nickname", ""))
+                    expected_stem = downloader.generate_detail_name(info)
+                    stem_prefix = expected_stem[:32] if len(expected_stem) > 32 else expected_stem
 
-                after_files = {p for d in dirs_to_check for p in d.glob("*.mp4")}
-                new_files = list(after_files - before_files)
-                if new_files:
-                    found_video = new_files[0]
-                else:
-                    # Match by video ID if not detected in difference
-                    matching = [p for d in dirs_to_check for p in d.glob("*.mp4") if detail_id in p.name]
-                    if matching:
-                        found_video = matching[0]
+                    pre_match = [
+                        p for d in dirs_to_check for p in d.glob("*.mp4")
+                        if p.stem == expected_stem
+                        or (stem_prefix and p.stem.startswith(stem_prefix))
+                        or (create_time and nickname and create_time in p.name and nickname in p.name)
+                        or detail_id in p.name
+                    ]
+                    if pre_match:
+                        found_video = pre_match[0]
+                        print(f"[DownloaderAPI] Found cached video matching metadata: {found_video.name}")
                     else:
-                        # Fallback to most recent non-dubbed video
-                        raw_videos = [
-                            p for d in dirs_to_check for p in d.glob("*.mp4")
-                            if "dubbed" not in p.name and "_clean" not in p.name and "sample" not in p.name and "half" not in p.name and "temp" not in p.name
-                        ]
-                        if raw_videos:
-                            found_video = max(raw_videos, key=lambda f: f.stat().st_mtime)
+                        print(f"[DownloaderAPI] Starting download: {desc}")
+                        await downloader.run(extracted_info, "detail", tiktok=is_tiktok)
+
+                        after_files = {p for d in dirs_to_check for p in d.glob("*.mp4")}
+                        new_files = list(after_files - before_files)
+                        if new_files:
+                            found_video = new_files[0]
                         else:
-                            raise RuntimeError("Download completed, but raw video file was not found in destination directory.")
+                            # If skipped by SQLite recorder because file was cleaned up from disk, delete DB record and re-download
+                            try:
+                                import sqlite3
+                                db_p = Path("TikTokDownloader/Volume/DouK-Downloader.db")
+                                if db_p.exists():
+                                    with sqlite3.connect(str(db_p)) as conn:
+                                        conn.execute("DELETE FROM download_data WHERE ID = ?", (str(detail_id),))
+                                        conn.commit()
+                                print(f"[DownloaderAPI] Cleared stale DB record for ID {detail_id}; re-fetching fresh video...")
+                                await downloader.run(extracted_info, "detail", tiktok=is_tiktok)
+                                after_files = {p for d in dirs_to_check for p in d.glob("*.mp4")}
+                                new_files = list(after_files - before_files)
+                            except Exception as re_err:
+                                print(f"[DownloaderAPI] DB record clear error: {re_err}")
+
+                            if new_files:
+                                found_video = new_files[0]
+                            else:
+                                matching = [
+                                    p for d in dirs_to_check for p in d.glob("*.mp4")
+                                    if p.stem == expected_stem
+                                    or (stem_prefix and p.stem.startswith(stem_prefix))
+                                    or (create_time and nickname and create_time in p.name and nickname in p.name)
+                                    or detail_id in p.name
+                                ]
+                                if matching:
+                                    found_video = matching[0]
+                                else:
+                                    raise RuntimeError(f"Download skipped or missing on disk for ID {detail_id} ({expected_stem}).")
 
                 # If found in volume_download_dir and out_path is different, move to out_path
                 if out_path.resolve() != found_video.parent.resolve():
@@ -170,6 +265,16 @@ class DownloaderAPI:
         """
         import re
         import shutil
+
+        # Clean and normalize channel_url
+        channel_url = str(channel_url).strip().strip("'\"")
+        url_match = re.search(r"https?://[^\s\"<>\\^`{|}，。；！？、【】《》]+", channel_url)
+        if url_match:
+            channel_url = url_match.group(0)
+        elif channel_url.startswith("MS4wLjABAAAA"):
+            channel_url = f"https://www.douyin.com/user/{channel_url}"
+        elif channel_url.startswith("douyin.com") or channel_url.startswith("www.douyin.com") or channel_url.startswith("v.douyin.com"):
+            channel_url = f"https://{channel_url}"
 
         project_root = Path(__file__).resolve().parent.parent
         default_input_dir = project_root / "input"
@@ -272,6 +377,11 @@ class DownloaderAPI:
 
                 terminal._get_account_data = hooked_get_account_data
 
+                # Track state of Volume directory before downloading
+                volume_dir = self.base_dir / "Volume"
+                volume_dir.mkdir(parents=True, exist_ok=True)
+                dirs_before = {d.resolve(): d.stat().st_mtime for d in volume_dir.iterdir() if d.is_dir()}
+
                 # 3. Download channel works
                 print(f"[DownloaderAPI] Downloading works for account: {sec_uid}...")
                 success = await terminal.deal_account_detail(
@@ -285,19 +395,35 @@ class DownloaderAPI:
                     print(f"[DownloaderAPI] Warning: deal_account_detail completed without items or was aborted.")
 
                 # 4. Locate downloaded directory in TikTokDownloader/Volume/
-                volume_dir = self.base_dir / "Volume"
-                matching_dirs = [
+                all_volume_dirs = [
                     d for d in volume_dir.iterdir()
-                    if d.is_dir() and sec_uid in d.name
+                    if d.is_dir() and d.name not in ("Cache", "Data", "Download")
                 ]
-                if not matching_dirs:
-                    posts_dirs = [d for d in volume_dir.glob("UID*_Posts") if d.is_dir()]
-                    if posts_dirs:
-                        matching_dirs = [max(posts_dirs, key=lambda d: d.stat().st_mtime)]
 
-                source_folder = None
-                if matching_dirs:
-                    source_folder = matching_dirs[0]
+                # Priority 1: Newly created or modified directory during this download
+                candidate_dirs = [
+                    d for d in all_volume_dirs
+                    if (d.resolve() not in dirs_before) or (d.stat().st_mtime > dirs_before.get(d.resolve(), 0))
+                ]
+
+                # Priority 2: Directory name matching channel nickname
+                if not candidate_dirs and channel_name:
+                    candidate_dirs = [d for d in all_volume_dirs if channel_name in d.name]
+
+                # Priority 3: Directory name containing sec_uid
+                if not candidate_dirs:
+                    candidate_dirs = [d for d in all_volume_dirs if sec_uid in d.name]
+
+                # Priority 4: Most recently modified UID* directory (UID*_Posts or UID*_发布作品)
+                if not candidate_dirs:
+                    uid_dirs = [d for d in all_volume_dirs if d.name.startswith("UID")]
+                    if uid_dirs:
+                        candidate_dirs = [max(uid_dirs, key=lambda d: d.stat().st_mtime)]
+                    elif all_volume_dirs:
+                        candidate_dirs = [max(all_volume_dirs, key=lambda d: d.stat().st_mtime)]
+
+                source_folder = candidate_dirs[0] if candidate_dirs else None
+                if source_folder:
                     parts = source_folder.name.split("_")
                     if len(parts) >= 3 and not channel_name:
                         channel_name = parts[1]
@@ -309,11 +435,12 @@ class DownloaderAPI:
                 channel_dest = out_base / clean_name
                 channel_dest.mkdir(parents=True, exist_ok=True)
 
-                print(f"[DownloaderAPI] Moving downloaded channel videos to: {channel_dest}")
+                print(f"[DownloaderAPI] Destination folder: {channel_dest}")
 
                 # 5. Move all .mp4 videos and .txt caption files into destination folder
                 downloaded_count = 0
                 if source_folder and source_folder.exists():
+                    print(f"[DownloaderAPI] Moving videos from: {source_folder.name} to {channel_dest.name}")
                     for item_file in source_folder.iterdir():
                         if item_file.is_file() and item_file.suffix.lower() in [".mp4", ".txt"]:
                             dest_file = channel_dest / item_file.name

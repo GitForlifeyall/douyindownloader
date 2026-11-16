@@ -7,7 +7,7 @@ End-to-end automated Dubbing Pipeline orchestrator.
 Coordinates:
   [Step 1] Download: Douyin/TikTok video via DownloaderAPI
   [Step 2] Transcribe: Speech-to-SRT via Faster-Whisper GPU
-  [Step 2.5] Subtitle Cleaner: Parallel Clause-Sampled RapidOCR Luminance Blur with Euclidean Smoothstep Pill Plate
+  [Step 2.5] Subtitle Cleaner: Parallel Per-Subtitle Tight RapidOCR Luminance Blur
   [Step 3] Translate: Isochronic viral script transcreation via Gemini SDK with Romanized Hinglish vocabulary
   [Step 4] Stem Separation: Meta HTDemucs Foley/SFX extraction & volume-boosted sidechain ducking
   [Step 5] Dub & Mux: Multi-engine TTS (OmniVoice local GPU / Sarvam AI / Google Gemini / Kokoro)
@@ -25,7 +25,7 @@ import subprocess
 import argparse
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Union, Dict, Any, List
+from typing import Optional, Union, Dict, Any, List, Tuple
 from concurrent.futures import ThreadPoolExecutor
 
 from .env_loader import configure_runtime_environment
@@ -38,10 +38,25 @@ from .tts_google import GoogleGeminiTTS
 from .tts_elevenlabs import ElevenLabsTTS
 from .tts_omnivoice import OmniVoiceTTS
 from .separator import AudioStemSeparator
-from .key_pool import get_active_gemini_keys, get_active_elevenlabs_keys
+from .key_pool import (
+    get_active_gemini_keys,
+    get_active_sarvam_keys,
+    get_active_elevenlabs_keys,
+    reset_exhausted_elevenlabs_keys,
+)
+from .anti_accent import balance_consecutive_english
+from .video_registry import VideoRegistry, drive_relative
 
 configure_runtime_environment()
 
+
+
+def normalize_aspect_ratio(ratio: Optional[str]) -> str:
+    """Normalize --ratio option to 'reel' (default 9:16) or 'square' (1:1)."""
+    val = str(ratio or "reel").strip().lower()
+    if val in ("square", "1:1", "1/1", "sq"):
+        return "square"
+    return "reel"
 
 
 def sanitize_filename(name: Union[str, Path], max_len: int = 55) -> str:
@@ -222,6 +237,99 @@ def clean_youtube_tags(raw_tags: Any, title: str = "") -> List[str]:
     return tags
 
 
+def resolve_google_drive_base() -> Optional[Path]:
+    """Find mounted Google Drive base directory across drive letters (e.g., I:/, H:/, G:/)."""
+    import string
+    candidates = [
+        Path("I:/My Drive/douyin"),
+        Path("H:/My Drive/douyin"),
+        Path("G:/My Drive/douyin"),
+    ]
+    for d in candidates:
+        if d.exists() and d.is_dir():
+            return d
+    for letter in string.ascii_uppercase:
+        p = Path(f"{letter}:/My Drive/douyin")
+        if p.exists() and p.is_dir():
+            return p
+    return None
+
+
+def _extract_batch_urls(raw_text: str) -> List[str]:
+    """Extract and deduplicate Douyin/TikTok HTTP(S) URLs while preserving input order."""
+    if not raw_text:
+        return []
+    candidates = re.findall(r"https?://[^\s\"'<>\\^`{|},，。；！？、【】《》]+", raw_text)
+    if not candidates:
+        # Also support pasted bare domain URLs without scheme (e.g. v.douyin.com/...)
+        for token in re.split(r"[\s,;]+", raw_text.strip()):
+            tok = token.strip().strip("'\"")
+            if tok and any(host in tok.lower() for host in ("douyin.com", "tiktok.com", "iesdouyin.com")):
+                if not tok.lower().startswith(("http://", "https://")):
+                    tok = f"https://{tok}"
+                candidates.append(tok)
+
+    seen = set()
+    urls: List[str] = []
+    for raw_url in candidates:
+        cleaned = raw_url.strip().rstrip(").,;!?\"'")
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            urls.append(cleaned)
+    return urls
+
+
+def _sanitize_batch_name(raw_name: str, default_prefix: str = "batch") -> str:
+    """Sanitize a batch folder name for safe local & Google Drive folder creation."""
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", (raw_name or "").strip())
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .")
+    if not cleaned:
+        return f"{default_prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    return cleaned[:100].strip(" .") or f"{default_prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+
+def _prompt_batch_inputs(default_batch_name: str = "") -> Tuple[str, List[str]]:
+    """Interactively prompt the user for an optional batch folder name and a list of URLs."""
+    print("\n" + "=" * 65)
+    print(" [Dubbing Studio] BATCH URLS PROMPT")
+    print("=" * 65)
+
+    if default_batch_name and default_batch_name.strip():
+        batch_name = _sanitize_batch_name(default_batch_name)
+        print(f" Batch Folder: {batch_name}")
+    else:
+        default_auto = _sanitize_batch_name("")
+        raw_name = input(f" Batch folder name [Enter for '{default_auto}']: ").strip()
+        batch_name = _sanitize_batch_name(raw_name) if raw_name else default_auto
+
+    print("\n Paste all video URLs below (one per line or space-separated).")
+    print(" Press Enter twice on empty lines, or type 'done', when finished:")
+
+    lines: List[str] = []
+    empty_streak = 0
+    while True:
+        try:
+            line = input()
+        except EOFError:
+            break
+
+        stripped = line.strip()
+        if stripped.lower() in ("done", "end", "run", "go"):
+            break
+        if not stripped:
+            empty_streak += 1
+            if lines and empty_streak >= 2:
+                break
+            continue
+
+        empty_streak = 0
+        lines.append(line)
+
+    urls = _extract_batch_urls("\n".join(lines))
+    print(f"\n [Batch URLs] Captured {len(urls)} unique URL(s) for batch '{batch_name}'.")
+    return batch_name, urls
+
+
 class DubbingPipeline:
     """Master Dubbing Pipeline orchestrating all 5 stages."""
 
@@ -233,12 +341,16 @@ class DubbingPipeline:
         gemini_model: str = "gemini-3.8-flash",
         tts_engine: str = "elevenlabs",
         tts_model_path: Optional[Union[str, Path]] = None,
-        tts_voices_path: Optional[Union[str, Path]] = None
+        tts_voices_path: Optional[Union[str, Path]] = None,
+        debug: bool = False,
+        registry_db: Optional[Union[str, Path]] = None,
+        enable_registry: bool = True,
     ):
         self.output_dir = Path(output_dir) if output_dir else Path.cwd() / "output"
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.input_dir = Path(input_dir) if input_dir else (self.output_dir.parent / "input").resolve()
         self.input_dir.mkdir(parents=True, exist_ok=True)
+        self.debug = debug or (os.getenv("DEBUG") in ("1", "true", "True")) or (os.getenv("DUBBING_DEBUG") in ("1", "true", "True"))
         self._setup_output_dirs(self.output_dir)
 
         self.downloader = DownloaderAPI()
@@ -249,96 +361,429 @@ class DubbingPipeline:
         has_sarvam_keys = bool(os.getenv("SARVAM_API_KEY") or os.getenv("SARVAM_API_KEYS"))
         self.sarvam_tts = SarvamTTS() if has_sarvam_keys else None
         self.omnivoice_tts = OmniVoiceTTS()
-        self.kokoro_tts = KokoroTTS(model_path=tts_model_path, voices_path=tts_voices_path)
+        try:
+            self.kokoro_tts = KokoroTTS(model_path=tts_model_path, voices_path=tts_voices_path)
+        except FileNotFoundError as e:
+            if self.tts_engine == "kokoro":
+                raise
+            print(f"[Pipeline] Optional KokoroTTS unavailable ({e}); skipping.")
+            self.kokoro_tts = None
         has_gemini_keys = bool(os.getenv("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEYS"))
         self.google_tts = GoogleGeminiTTS() if has_gemini_keys else None
-        has_elevenlabs_keys = bool(os.getenv("ELEVENLABS_API_KEY") or os.getenv("ELEVENLABS_API_KEYS"))
-        self.elevenlabs_tts = ElevenLabsTTS() if has_elevenlabs_keys else None
+        active_elevenlabs_keys = get_active_elevenlabs_keys()
+        self.elevenlabs_tts = ElevenLabsTTS() if active_elevenlabs_keys else None
+
+        # Durable video index (local SQLite + JSON/CSV snapshots mirrored to Drive)
+        self.registry = None
+        if enable_registry:
+            try:
+                self.registry = VideoRegistry(registry_db)
+                print(f"[Registry] Indexing all videos in: {self.registry.db_path}")
+            except Exception as registry_err:
+                print(f"[Registry] Warning: registry disabled ({registry_err})")
 
 
     def _setup_output_dirs(self, base_dir: Path):
-        """Create dedicated, purpose-specific output folders."""
-        self.final_dir = base_dir / "final_videos"
+        """
+        Create dedicated, purpose-specific output folders.
+        Final video is placed directly in its own channel folder (base_dir),
+        NEVER in a final_videos/ subfolder.
+        """
+        self.final_dir = base_dir
         self.clean_dir = base_dir / "clean_videos"
         self.subtitles_dir = base_dir / "subtitles"
         self.metadata_dir = base_dir / "metadata"
         self.stems_dir = base_dir / "audio_stems"
+        self.thumbnails_dir = base_dir / "thumbnails"
 
-        for d in (self.final_dir, self.clean_dir, self.subtitles_dir, self.metadata_dir, self.stems_dir):
+        for d in (self.final_dir, self.subtitles_dir, self.metadata_dir, self.thumbnails_dir):
             d.mkdir(parents=True, exist_ok=True)
 
-    def reorganize_existing_output(self):
+    # ------------------------------------------------------------------
+    # Video registry helpers (never let indexing break a render)
+    # ------------------------------------------------------------------
+    def _record_registry_download(
+        self,
+        source_url: str,
+        local_path: Union[str, Path],
+        channel: str = "",
+        batch: str = "",
+    ) -> str:
+        if not self.registry:
+            return ""
+        try:
+            row = self.registry.record_download(
+                source_url=source_url,
+                local_path=local_path,
+                channel=channel,
+                batch=batch,
+            )
+            return row.get("video_id", "")
+        except Exception as exc:
+            print(f"[Registry] Warning: download record failed ({exc})")
+            return ""
+
+    def _record_registry_render(
+        self,
+        final_video: Optional[Union[str, Path]],
+        title: str,
+        language: str,
+        tts_engine: str,
+        metadata: Optional[Dict[str, Any]] = None,
+        video_id: str = "",
+        source_url: str = "",
+        channel: str = "",
+        batch: str = "",
+    ) -> None:
+        if not self.registry:
+            return
+        try:
+            self.registry.record_render(
+                video_id=video_id or None,
+                source_url=source_url or None,
+                final_video=final_video,
+                title=title,
+                language=language,
+                tts_engine=tts_engine,
+                duration_sec=get_video_duration(final_video) if final_video else None,
+                metadata=metadata or {},
+                channel=channel,
+                batch=batch,
+            )
+        except Exception as exc:
+            print(f"[Registry] Warning: render record failed ({exc})")
+
+    def _record_registry_drive(
+        self,
+        drive_path: Union[str, Path],
+        video_id: str = "",
+        final_video: Optional[Union[str, Path]] = None,
+        link: str = "",
+        file_id: str = "",
+        thumbnail_path: Optional[Union[str, Path]] = None,
+        thumbnail_link: str = "",
+        source_url: str = "",
+    ) -> None:
+        if not self.registry:
+            return
+        try:
+            drive_path_obj = Path(drive_path)
+            self.registry.record_drive(
+                video_id=video_id or None,
+                final_filename=drive_path_obj.name or (Path(final_video).name if final_video else ""),
+                drive_folder=drive_relative(drive_path_obj.parent),
+                drive_path=str(drive_path_obj),
+                link=link,
+                file_id=file_id,
+                thumbnail_path=thumbnail_path,
+                thumbnail_link=thumbnail_link,
+                source_url=source_url or None,
+            )
+        except Exception as exc:
+            print(f"[Registry] Warning: Drive record failed ({exc})")
+
+    def _record_registry_movie(
+        self,
+        video_title: str,
+        metadata: Optional[Dict[str, Any]],
+        video_id: str = "",
+        source_ref: str = "",
+        channel: str = "",
+        batch: str = "",
+        force_lookup: bool = False,
+    ) -> Dict[str, Any]:
         """
-        Scan output directory and reorganize existing cluttered files into their respective subfolders:
-          - final_videos/  : Strictly final dubbed MP4s (voiceover + SFX/BGM mixed)
-          - clean_videos/  : Inpaint-cleaned MP4s
-          - subtitles/     : Raw and dubbed SRT files
-          - metadata/      : Metadata JSON files
-          - audio_stems/   : Stems and intermediate master audio files
+        Resolve and persist the movie identity for this video.
+        Wikipedia is free; Gemini's metadata fields are used as a fallback.
+        """
+        if not self.registry:
+            return {}
+
+        details: Dict[str, Any] = {}
+        if force_lookup:
+            try:
+                details = self.translator.lookup_movie_details(video_title=video_title) or {}
+            except Exception as exc:
+                print(f"[Registry] Movie lookup skipped ({exc})")
+                details = {}
+
+        meta = metadata or {}
+        for key in ("movie_name", "movie_year", "movie_genre", "movie_synopsis"):
+            if not details.get(key) and meta.get(key):
+                details[key] = meta[key]
+
+        movie_name = str(details.get("movie_name") or "").strip()
+        if not movie_name:
+            return {}
+
+        try:
+            saved = self.registry.record_movie(
+                movie_name=movie_name,
+                movie_year=details.get("movie_year"),
+                movie_genre=str(details.get("movie_genre") or ""),
+                movie_synopsis=str(details.get("movie_synopsis") or ""),
+                movie_context=str(details.get("movie_context") or ""),
+                movie_source=str(details.get("movie_source") or ("gemini" if meta.get("movie_name") else "")),
+                movie_source_url=str(details.get("movie_source_url") or ""),
+                video_id=video_id or None,
+                source_url=source_ref or None,
+                channel=channel,
+                batch=batch,
+            )
+        except Exception as exc:
+            print(f"[Registry] Warning: movie record failed ({exc})")
+            return {}
+
+        # Keep generated metadata files in sync with the resolved movie identity.
+        if metadata is not None:
+            for key in ("movie_name", "movie_year", "movie_genre", "movie_synopsis", "movie_context", "movie_source", "movie_source_url"):
+                if details.get(key):
+                    metadata[key] = details[key]
+
+        return saved or details
+
+
+    def _cleanup_temp_files(
+        self,
+        clean_slug: str,
+        clean_video_target: Optional[Union[str, Path]] = None,
+        video_for_dubbing: Optional[Union[str, Path]] = None,
+        sfx_track: Optional[Union[str, Path]] = None,
+        video_work_dir: Optional[Union[str, Path]] = None,
+        work_dir: Optional[Union[str, Path]] = None
+    ):
+        """
+        Delete all intermediate temporary files, audio stems, clean video plates,
+        and audio blocks right after video generation.
+        STRICT RULE: Never delete any .srt files or final .mp4 videos!
         """
         import shutil
-        print(f"[Dubbing Studio] Reorganizing existing files in: {self.output_dir}")
-        self._setup_output_dirs(self.output_dir)
+        deleted_count = 0
+        freed_bytes = 0
 
-        for item in list(self.output_dir.iterdir()):
-            if item.is_dir():
-                if item.name in ["final_videos", "clean_videos", "subtitles", "metadata", "audio_stems"]:
-                    continue
-                if item.name.startswith("stems_") or item.name == "temp_sarvam_slices" or item.name.startswith("cache_"):
-                    clean_name = f"stems_{sanitize_filename(item.name[6:])}" if item.name.startswith("stems_") else item.name
-                    dest = self.stems_dir / clean_name
+        def _safe_remove_file(fpath: Optional[Union[str, Path]]):
+            nonlocal deleted_count, freed_bytes
+            if not fpath:
+                return
+            p = Path(fpath)
+            # Never delete .srt files or final video files!
+            if p.suffix.lower() == ".srt" or not p.exists():
+                return
+            if p.is_file():
+                try:
+                    freed_bytes += p.stat().st_size
+                    p.unlink()
+                    deleted_count += 1
+                except Exception as e:
+                    print(f"  [Cleanup Warning] Could not delete {p.name}: {e}")
+
+        def _safe_remove_dir(dpath: Optional[Union[str, Path]]):
+            nonlocal deleted_count, freed_bytes
+            if not dpath:
+                return
+            p = Path(dpath)
+            if p.exists() and p.is_dir():
+                try:
+                    # Save any .srt files inside this directory to self.subtitles_dir before deleting!
+                    for srt_file in p.rglob("*.srt"):
+                        dest_srt = self.subtitles_dir / srt_file.name
+                        if not dest_srt.exists():
+                            shutil.copy2(str(srt_file), str(dest_srt))
+                            print(f"  [Preserved SRT] Saved subtitle before cleanup: {srt_file.name}")
+                    for f in p.rglob("*"):
+                        if f.is_file() and f.suffix.lower() != ".srt":
+                            freed_bytes += f.stat().st_size
+                            deleted_count += 1
+                    shutil.rmtree(p, ignore_errors=True)
+                except Exception as e:
+                    print(f"  [Cleanup Warning] Could not remove directory {p.name}: {e}")
+
+        # 1. Clean video intermediate plates and bounding box JSONs
+        for cv_path in (clean_video_target, video_for_dubbing):
+            if cv_path:
+                cv = Path(cv_path)
+                if "_clean" in cv.stem or (cv.parent and cv.parent.name == "clean_videos"):
+                    _safe_remove_file(cv)
+                    _safe_remove_file(cv.with_name(f"{cv.stem}_box.json"))
+                    _safe_remove_file(cv.with_name(f"{clean_slug}_clean_box.json"))
+                    _safe_remove_file(self.clean_dir / f"{clean_slug}_clean_box.json")
+                    _safe_remove_file(self.clean_dir / f"{cv.stem}_box.json")
+
+        if self.clean_dir.exists():
+            for f in self.clean_dir.glob(f"{clean_slug}*"):
+                if f.suffix.lower() != ".srt":
+                    _safe_remove_file(f)
+
+        # 2. Block align work directories and files
+        if video_work_dir:
+            _safe_remove_dir(video_work_dir)
+        if work_dir and Path(work_dir) != self.stems_dir:
+            _safe_remove_dir(work_dir)
+
+        _safe_remove_dir(self.stems_dir / f"block_align_{clean_slug}")
+        _safe_remove_dir(self.stems_dir / f"single_narrator_{clean_slug}")
+        _safe_remove_dir(self.output_dir / f"align_work_{clean_slug}")
+        _safe_remove_dir(self.output_dir / f"align_work_{clean_slug}_clean")
+
+        # 3. Demucs / DBS stem separation directories
+        _safe_remove_dir(self.stems_dir / f"stems_{clean_slug}")
+        _safe_remove_dir(self.output_dir / f"stems_{clean_slug}")
+        _safe_remove_dir(self.stems_dir / "_dbs_work")
+        if sfx_track and Path(sfx_track).exists():
+            _safe_remove_file(sfx_track)
+
+        # 4. Temp TTS slices and cache folders
+        _safe_remove_dir(self.stems_dir / "temp_sarvam_slices")
+        _safe_remove_dir(self.output_dir / "temp_sarvam_slices")
+        _safe_remove_dir(self.stems_dir / f"cache_sarvam_{clean_slug}")
+        _safe_remove_dir(self.stems_dir / f"google_flash_cache_{clean_slug}")
+
+        for pattern in (f"temp_dub_{clean_slug}*", f"*{clean_slug}*voice.wav", f"*{clean_slug}*sfx.wav", f"*{clean_slug}*mixed*.wav"):
+            for f in self.stems_dir.glob(pattern):
+                _safe_remove_file(f)
+            for f in self.output_dir.glob(pattern):
+                _safe_remove_file(f)
+
+        # 5. Prune empty parent intermediate folders
+        for d in (self.clean_dir, self.stems_dir, self.output_dir / "final_videos", self.final_dir / "final_videos"):
+            if d.exists() and d.is_dir():
+                try:
+                    has_files = any(f.is_file() for f in d.rglob("*"))
+                    if not has_files:
+                        shutil.rmtree(d, ignore_errors=True)
+                except Exception:
+                    pass
+
+        mb_freed = freed_bytes / (1024 * 1024)
+        print(f"[Pipeline Cleanup] Deleted temp files ({deleted_count} files, {mb_freed:.1f} MB freed). Subtitle SRTs preserved.")
+
+    def purge_all_caches_and_temp(self, base_dir: Optional[Path] = None):
+        """
+        Delete all existing cache folders, stem directories, and intermediate clean video plates
+        from the output directory.
+        Move existing final videos out of legacy 'final_videos/' folders directly into their channel folders.
+        PRESERVES: All .srt files, all final .mp4 videos, and all metadata.json files!
+        """
+        import shutil
+        target_dir = Path(base_dir) if base_dir else self.output_dir
+        print(f"\n=======================================================")
+        print(f"[Purge & Reorganize] Cleaning caches & reorganizing: {target_dir}")
+        print(f"=======================================================")
+
+        total_freed = 0
+        total_moved = 0
+
+        # Step 1: In all channel subdirectories, move videos out of final_videos/ into channel folder
+        for item in list(target_dir.iterdir()):
+            if not item.is_dir():
+                continue
+
+            final_sub = item / "final_videos"
+            if final_sub.exists() and final_sub.is_dir():
+                for vid in list(final_sub.glob("*.mp4")):
+                    dest = item / vid.name
                     if not dest.exists():
-                        shutil.move(str(item), str(dest))
-                        print(f"  [Moved Stem Folder] {item.name} -> audio_stems/{dest.name}")
+                        shutil.move(str(vid), str(dest))
+                        print(f"  [Moved Video to Channel] {vid.name} -> {item.name}/{dest.name}")
+                        total_moved += 1
                     else:
-                        for sub_f in item.iterdir():
-                            target_f = dest / sub_f.name
-                            if not target_f.exists():
-                                shutil.copy2(str(sub_f), str(target_f))
-                        shutil.rmtree(str(item), ignore_errors=True)
-                continue
+                        vid.unlink()
+                for s in list(final_sub.glob("*.srt")):
+                    dest_srt = (item / "subtitles" / s.name) if (item / "subtitles").exists() else (item / s.name)
+                    if not dest_srt.exists():
+                        shutil.move(str(s), str(dest_srt))
+                shutil.rmtree(final_sub, ignore_errors=True)
 
-            if not item.is_file():
-                continue
+            clean_sub = item / "clean_videos"
+            if clean_sub.exists() and clean_sub.is_dir():
+                for f in clean_sub.rglob("*"):
+                    if f.is_file() and f.suffix.lower() != ".srt":
+                        try:
+                            total_freed += f.stat().st_size
+                            f.unlink()
+                        except Exception:
+                            pass
+                shutil.rmtree(clean_sub, ignore_errors=True)
+                print(f"  [Cleaned] Removed intermediate clean_videos in: {item.name}")
 
-            name = item.name
-            stem = item.stem
-            suffix = item.suffix.lower()
+            stems_sub = item / "audio_stems"
+            if stems_sub.exists() and stems_sub.is_dir():
+                for s in stems_sub.rglob("*.srt"):
+                    dest_s = item / "subtitles" / s.name
+                    dest_s.parent.mkdir(parents=True, exist_ok=True)
+                    if not dest_s.exists():
+                        shutil.copy2(str(s), str(dest_s))
+                for f in stems_sub.rglob("*"):
+                    if f.is_file() and f.suffix.lower() != ".srt":
+                        try:
+                            total_freed += f.stat().st_size
+                            f.unlink()
+                        except Exception:
+                            pass
+                shutil.rmtree(stems_sub, ignore_errors=True)
+                print(f"  [Cleaned] Removed audio_stems in: {item.name}")
 
-            if suffix == ".mp4":
-                if stem.endswith("_dubbed") or "_dubbed" in stem:
-                    clean_name = sanitize_filename(stem)
-                    dest = self.final_dir / f"{clean_name}_hindi_dubbed.mp4"
-                    shutil.move(str(item), str(dest))
-                    print(f"  [Final Video] {name} -> final_videos/{dest.name}")
-                    # Also mirror to Google Drive if mounted
-                    drive_final = Path("H:/My Drive/douyin/final_videos")
-                    if Path("H:/My Drive/douyin").exists():
-                        drive_final.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(str(dest), str(drive_final / dest.name))
-                        print(f"  [Google Drive Sync] Synced {dest.name} to {drive_final}")
-                elif stem.endswith("_clean"):
-                    clean_name = sanitize_filename(stem)
-                    dest = self.clean_dir / f"{clean_name}_clean.mp4"
-                    shutil.move(str(item), str(dest))
-                    print(f"  [Clean Video] {name} -> clean_videos/{dest.name}")
-            elif suffix == ".srt":
-                clean_name = sanitize_filename(stem)
-                if "hindi" in stem.lower():
-                    dest = self.subtitles_dir / f"{clean_name}_hindi.srt"
+        # Step 2: Handle root output/final_videos/
+        root_final = target_dir / "final_videos"
+        if root_final.exists() and root_final.is_dir():
+            for vid in list(root_final.glob("*.mp4")):
+                name = vid.name
+                dest_dir = target_dir
+                if " - " in name:
+                    prefix = name.split(" - ")[0].strip()
+                    cand_chan = target_dir / prefix
+                    if cand_chan.exists() and cand_chan.is_dir():
+                        dest_dir = cand_chan
+                dest = dest_dir / name
+                if not dest.exists():
+                    shutil.move(str(vid), str(dest))
+                    print(f"  [Moved Root Final Video] {name} -> {dest_dir.name}/{dest.name}")
+                    total_moved += 1
                 else:
-                    dest = self.subtitles_dir / f"{clean_name}_raw.srt"
-                shutil.move(str(item), str(dest))
-                print(f"  [Subtitle] {name} -> subtitles/{dest.name}")
-            elif suffix == ".json":
-                clean_name = sanitize_filename(stem)
-                dest = self.metadata_dir / f"{clean_name}_metadata.json"
-                shutil.move(str(item), str(dest))
-                print(f"  [Metadata] {name} -> metadata/{dest.name}")
-            elif suffix in [".wav", ".mp3"] or "master" in stem or "slice" in stem:
-                dest = self.stems_dir / item.name
-                shutil.move(str(item), str(dest))
-                print(f"  [Audio Intermediate] {name} -> audio_stems/{dest.name}")
+                    vid.unlink()
+            for s in list(root_final.glob("*.srt")):
+                dest_srt = target_dir / "subtitles" / s.name
+                dest_srt.parent.mkdir(parents=True, exist_ok=True)
+                if not dest_srt.exists():
+                    shutil.move(str(s), str(dest_srt))
+            shutil.rmtree(root_final, ignore_errors=True)
+
+        # Step 3: Handle root output/clean_videos and audio_stems
+        for root_temp in (target_dir / "clean_videos", target_dir / "audio_stems", target_dir / "comparison_audio"):
+            if root_temp.exists() and root_temp.is_dir():
+                for s in root_temp.rglob("*.srt"):
+                    dest_s = target_dir / "subtitles" / s.name
+                    dest_s.parent.mkdir(parents=True, exist_ok=True)
+                    if not dest_s.exists():
+                        shutil.copy2(str(s), str(dest_s))
+                for f in root_temp.rglob("*"):
+                    if f.is_file() and f.suffix.lower() != ".srt":
+                        try:
+                            total_freed += f.stat().st_size
+                            f.unlink()
+                        except Exception:
+                            pass
+                shutil.rmtree(root_temp, ignore_errors=True)
+                print(f"  [Cleaned] Removed root intermediate directory: {root_temp.name}")
+
+        # Step 4: Handle cache folders (cache_*, sarvam_*, temp_*)
+        for item in list(target_dir.iterdir()):
+            if item.is_dir() and (item.name.startswith("cache_") or item.name.startswith("sarvam_") or item.name.startswith("temp_") or item.name.startswith("test_")):
+                for f in item.rglob("*"):
+                    if f.is_file() and f.suffix.lower() != ".srt":
+                        try:
+                            total_freed += f.stat().st_size
+                        except Exception:
+                            pass
+                shutil.rmtree(item, ignore_errors=True)
+                print(f"  [Cleaned Cache] Removed {item.name}")
+
+        mb_freed = total_freed / (1024 * 1024)
+        print(f"\n[Purge Complete] Freed {mb_freed:.1f} MB of temp/cache files. Moved {total_moved} videos to channel folders. SRTs preserved!\n")
+
+    def reorganize_existing_output(self):
+        """Reorganize output files into channel folders and purge temporary caches."""
+        self.purge_all_caches_and_temp()
 
 
     def _resolve_tts(self, target_lang: str) -> Any:
@@ -348,47 +793,41 @@ class DubbingPipeline:
 
         # ElevenLabs v4 (Default & 1st Priority)
         if self.tts_engine in ("elevenlabs", "eleven_labs", "11labs"):
-            # If ElevenLabs keys are exhausted, cleanly switch to Google Gemini Flash 3.8 TTS
-            if not get_active_elevenlabs_keys() and get_active_gemini_keys():
-                print("[Pipeline] Notice: ElevenLabs keys exhausted! Auto-switching engine to Google Gemini Flash 3.8 TTS...")
-                self.tts_engine = "google"
-                return self.google_tts or GoogleGeminiTTS()
-            if self.elevenlabs_tts:
-                return self.elevenlabs_tts
-            if has_elevenlabs_key:
-                return ElevenLabsTTS()
-            print("[Pipeline] WARNING: ELEVENLABS_API_KEY / ELEVENLABS_API_KEYS missing! Falling back to Google Gemini Flash 3.8 TTS.")
-            return self.google_tts or self.sarvam_tts or self.omnivoice_tts
+            if get_active_elevenlabs_keys():
+                return self.elevenlabs_tts or ElevenLabsTTS()
+            print("[Pipeline] Notice: ElevenLabs keys exhausted! Auto-switching engine to Google Gemini Flash 3.8 TTS...")
+            self.tts_engine = "google"
+            return self.google_tts or GoogleGeminiTTS()
 
-        # Google Flash 3.8 TTS (Fallback)
+        # Google Flash 3.8 TTS (2nd Priority)
         elif self.tts_engine in ("google", "gemini"):
-            # Check if Gemini keys are out of quota; if so, switch to Sarvam or ElevenLabs
-            if not get_active_gemini_keys() and get_active_sarvam_keys():
-                print("[Pipeline] Notice: Gemini keys exhausted! Auto-switching engine to Sarvam AI (Bulbul v3)...")
+            if get_active_gemini_keys():
+                return self.google_tts or GoogleGeminiTTS()
+            if get_active_sarvam_keys():
+                print("[Pipeline] Notice: Gemini keys exhausted! Auto-switching engine to Sarvam AI (Bulbul v4)...")
                 self.tts_engine = "sarvam"
                 return self.sarvam_tts or SarvamTTS()
-            if self.google_tts:
-                return self.google_tts
-            if has_gemini_key:
-                return GoogleGeminiTTS()
-            print("[Pipeline] WARNING: GEMINI_API_KEY / GEMINI_API_KEYS missing! Falling back to ElevenLabs/Sarvam.")
-            return self.elevenlabs_tts or self.sarvam_tts or self.omnivoice_tts
+            print("[Pipeline] WARNING: Gemini and Sarvam keys exhausted/missing! Switching to Chirp/Kokoro.")
+            self.tts_engine = "kokoro"
+            return self.kokoro_tts
 
-        # Sarvam AI (Bulbul v3)
+        # Sarvam AI Bulbul v4 (3rd Priority)
         elif self.tts_engine in ("sarvam", "auto") or not self.tts_engine:
-            if self.sarvam_tts:
-                return self.sarvam_tts
-            if has_sarvam_key:
-                return SarvamTTS()
-            print("[Pipeline] WARNING: SARVAM_API_KEY / SARVAM_API_KEYS missing! Falling back to Google.")
-            return self.google_tts or self.elevenlabs_tts or self.omnivoice_tts
+            if get_active_sarvam_keys():
+                return self.sarvam_tts or SarvamTTS()
+            print("[Pipeline] WARNING: SARVAM_API_KEY / SARVAM_API_KEYS missing or exhausted! Switching to Kokoro.")
+            self.tts_engine = "kokoro"
+            return self.kokoro_tts
+
+        elif self.tts_engine in ("chirp", "google_chat"):
+            return self.kokoro_tts
 
         elif self.tts_engine in ("omnivoice", "omni"):
             return self.omnivoice_tts
         elif self.tts_engine == "kokoro":
             return self.kokoro_tts
 
-        return self.google_tts or self.elevenlabs_tts or self.sarvam_tts or self.omnivoice_tts
+        return self.google_tts or self.elevenlabs_tts or self.sarvam_tts or self.omnivoice_tts or self.kokoro_tts
 
     def _condense_to_short(
         self,
@@ -485,16 +924,37 @@ class DubbingPipeline:
         preserve_bgm: bool = True,
         clean_subtitles: bool = True,
         remove_watermark: bool = False,
-        bgm_volume: float = 1.05,
+        bgm_volume: Optional[float] = None,
         enable_metadata: bool = True,
         style: str = "viral",
         fit_short: bool = False,
-        max_duration: float = 58.0
+        max_duration: float = 58.0,
+        channel_name: str = "",
+        anti_accent: bool = False,
+        debug: Optional[bool] = None,
+        loop: bool = False,
+        mirror: bool = False,
+        smart_crop: bool = False,
+        movie: bool = False,
+        ratio: str = "reel",
+        watermark: Optional[str] = None,
+        disable_bgm: bool = False,
+        allow_tts_fallback: bool = True,
+        move_to_drive: bool = False,
+        delete_input: bool = False,
+        thumbnail: bool = False,
+        capture_movie_details: bool = False,
     ) -> Dict[str, Any]:
         """
         Execute full end-to-end pipeline:
         Download -> Clean Subtitles/Watermarks -> Transcribe -> Translate -> Stem Separation -> Synthesize & Dub.
         """
+        is_debug = self.debug if debug is None else debug
+        if not is_debug:
+            is_debug = bool(os.getenv("DEBUG") in ("1", "true", "True") or os.getenv("DUBBING_DEBUG") in ("1", "true", "True"))
+
+        effective_bgm_volume = float(bgm_volume) if bgm_volume is not None else (1.35 if movie else 1.05)
+
         active_style = (style or "viral").lower()
         active_tts = self._resolve_tts(target_lang)
         is_omni = isinstance(active_tts, OmniVoiceTTS)
@@ -507,7 +967,7 @@ class DubbingPipeline:
             selected_voice = voice if (voice and voice.lower() not in ("shubh", "arvind", "amartya", "puck", "ludo", "enzo")) else "roger"
 
         elif is_google:
-            selected_voice = voice if (voice and voice.lower() not in ("shubh", "arvind", "amartya", "puck")) else "Ludo"
+            selected_voice = voice if (voice and voice.lower() not in ("shubh", "arvind", "amartya")) else "Ludo"
         elif is_omni:
             selected_voice = voice or "male_deep"
         elif is_sarvam:
@@ -522,7 +982,8 @@ class DubbingPipeline:
         elif is_google:
             engine_name = f"Google Gemini TTS ({selected_voice})"
         elif is_sarvam:
-            engine_name = f"Sarvam AI Bulbul v3 ({selected_voice})"
+            sarvam_ver = "Bulbul v4-flash" if any(tag in selected_voice for tag in ("_hi_", "_en_", "_enhi_")) else "Bulbul v3"
+            engine_name = f"Sarvam AI {sarvam_ver} ({selected_voice})"
         else:
             engine_name = f"Kokoro ({selected_voice})"
 
@@ -538,8 +999,18 @@ class DubbingPipeline:
         print(f" Target Language : {target_lang}")
         print(f" TTS Engine      : {engine_name}")
         print(f" Voice & Speed   : {selected_voice} @ {speed}x")
-        print(f" Preserve BGM/SFX: {preserve_bgm} (Meta Demucs)")
-        print(f" Clean Subtitles : {clean_subtitles} (Luminance-Suppressed Blur)")
+        print(f" Preserve BGM/SFX: {preserve_bgm} (Meta HTDemucs v4 + Wiener Bleed Suppression, BGM: {effective_bgm_volume:.2f}x)")
+        if movie:
+            print(f" Movie Mode      : ENABLED (Fast OCR Crop + Auto-Reels Blurred Canvas + 'movie explanation' BGM + Original Duration Sync + Word-Synced Captions)")
+        else:
+            print(f" Clean Subtitles : {clean_subtitles} (Per-Subtitle Tight RapidOCR Blur)")
+        if anti_accent:
+            print(f" Anti-Accent     : {anti_accent} (Syllable-Weighted English Pair Breaker)")
+        clean_watermark = " ".join(str(watermark or "").strip().split())
+        if clean_watermark:
+            print(f" Watermark       : {clean_watermark.upper()} (SoftLight Blend + Stroke/Shadow, Bottom Center)")
+        if is_debug:
+            print(f" Debug Mode      : ENABLED (Preserving stems, clean plates, box JSONs & logs)")
         print(f" Output Folder   : {self.output_dir}")
         print("=" * 50)
 
@@ -548,11 +1019,42 @@ class DubbingPipeline:
         # -------------------------------------------------------------
         video_path = self.downloader.download_video(url_or_file, output_dir=self.input_dir)
 
+        # Configure channel-specific output folder so final videos are in their channel folder
+        detected_channel = channel_name or (video_path.parent.name if video_path.parent.name.lower() not in ("input", "clean_videos", "videos", "output", ".") else "")
+        if not detected_channel and " - " in video_path.stem:
+            parts = [p.strip() for p in video_path.stem.split(" - ") if p.strip()]
+            if len(parts) >= 2:
+                cand_chan = sanitize_filename(parts[0])
+                if cand_chan and len(cand_chan) < 35:
+                    detected_channel = cand_chan
+
+        if detected_channel:
+            target_out_dir = self.output_dir / detected_channel if self.output_dir.name != detected_channel else self.output_dir
+            target_out_dir.mkdir(parents=True, exist_ok=True)
+            self._setup_output_dirs(target_out_dir)
+        else:
+            self._setup_output_dirs(self.output_dir)
+
+        # Register the raw download (batch runners may have pre-registered the URL)
+        source_ref = str(url_or_file)
+        registry_video_id = self._record_registry_download(
+            source_url=source_ref if source_ref.lower().startswith(("http://", "https://")) else "",
+            local_path=video_path,
+            channel=detected_channel,
+        )
+
         # -------------------------------------------------------------
-        # Step 1.5: Fit Short Condenser (Fast-forward if duration > max_duration)
+        # Step 1.5: Fit Short Condenser Check (Preserve original video for Whisper)
         # -------------------------------------------------------------
+        orig_dur = get_video_duration(video_path)
         if fit_short:
-            video_path = self._condense_to_short(video_path, max_duration=max_duration, force=force)
+            print("\n" + "=" * 60)
+            print(f" [Short Condenser] 1-Minute Short Mode Active (Target: <= {max_duration:.1f}s)")
+            print(f"   Original Video Duration : {orig_dur:.1f}s")
+            print(f"   Strategy: Preserving original video for clean Whisper GPU transcription.")
+            print(f"             Condensing narration script block-by-block via Gemini.")
+            print(f"             Retiming video & SFX via Block Aligner to match condensed speech.")
+            print("=" * 60)
 
         base_stem = video_path.stem
         if base_stem.endswith("_clean"):
@@ -560,9 +1062,23 @@ class DubbingPipeline:
         clean_slug = sanitize_filename(base_stem)
         print(f"[Pipeline] Clean Video Slug: {clean_slug}")
 
-        # Check if already fully processed and final video exists
+        # Check if already fully processed and final video exists for THIS specific style & mode
         lang_tag = "hindi" if target_lang.lower().startswith("hi") or "hinglish" in target_lang.lower() else target_lang.lower()
-        meta_json_file = self.metadata_dir / f"{clean_slug}_{lang_tag}_metadata.json"
+        active_style = (style or "viral").lower()
+        style_suffix = f"_{active_style}" if active_style != "viral" else ""
+        short_suffix = "_short" if fit_short else ""
+        loop_suffix = "_loop" if loop else ""
+        mirror_suffix = "_mirror" if mirror else ""
+        smartcrop_suffix = "_smartcrop" if smart_crop else ""
+        movie_suffix = "_movie" if movie else ""
+        ratio_norm = normalize_aspect_ratio(ratio)
+        ratio_suffix = "_square" if ratio_norm == "square" else ""
+        normalized_mode = "block_aligned" if fit_short else (dub_mode or "block_aligned").lower()
+        mode_suffix = "_paragraph" if normalized_mode in ("paragraph", "single_narrator", "narrator", "continuous") else ""
+
+        meta_json_file = self.metadata_dir / f"{clean_slug}_{lang_tag}{style_suffix}{short_suffix}{loop_suffix}{mode_suffix}{mirror_suffix}{smartcrop_suffix}{movie_suffix}{ratio_suffix}_metadata.json"
+        wm_marker_file = self.metadata_dir / f"{clean_slug}_{lang_tag}{style_suffix}{short_suffix}{loop_suffix}{mode_suffix}{mirror_suffix}{smartcrop_suffix}{movie_suffix}{ratio_suffix}_wm.txt"
+        wm_norm = clean_watermark.upper()
         cached_final_vid = None
         cached_meta = None
         if not force:
@@ -571,17 +1087,37 @@ class DubbingPipeline:
                     cached_meta = json.loads(meta_json_file.read_text(encoding="utf-8"))
                     clean_title_fn = sanitize_title_for_filename(cached_meta.get("title", ""))
                     if clean_title_fn:
-                        candidate = self.final_dir / f"{clean_title_fn}.mp4"
+                        ratio_tag = " Square" if ratio_norm == "square" else ""
+                        movie_tag = " Movie" if movie else ""
+                        crop_tag = " Smart Crop" if smart_crop else ""
+                        mirror_tag = " Mirrored" if mirror else ""
+                        mode_tag = f" {normalized_mode.replace('_', ' ').title()}" if normalized_mode != "block_aligned" else ""
+                        var_tag = f" [{active_style.title()}{mode_tag}{mirror_tag}{crop_tag}{movie_tag}{ratio_tag}]" if (active_style != "viral" or normalized_mode != "block_aligned" or mirror or smart_crop or movie or ratio_norm != "reel") else ""
+                        candidate = self.final_dir / f"{clean_title_fn}{var_tag}.mp4"
                         if candidate.exists() and candidate.stat().st_size > 100000:
                             cached_final_vid = candidate
+                        elif (self.final_dir / "final_videos" / f"{clean_title_fn}{var_tag}.mp4").exists():
+                            cached_final_vid = self.final_dir / "final_videos" / f"{clean_title_fn}{var_tag}.mp4"
                 except Exception:
                     pass
 
             if cached_final_vid is None:
-                for candidate in self.final_dir.glob(f"{clean_slug}*.mp4"):
+                pattern = f"{clean_slug}_{lang_tag}{style_suffix}{short_suffix}{loop_suffix}{mode_suffix}{mirror_suffix}{smartcrop_suffix}{movie_suffix}{ratio_suffix}*.mp4"
+                for candidate in self.final_dir.glob(pattern):
                     if candidate.stat().st_size > 100000:
                         cached_final_vid = candidate
                         break
+                if cached_final_vid is None and (self.final_dir / "final_videos").exists():
+                    for candidate in (self.final_dir / "final_videos").glob(pattern):
+                        if candidate.stat().st_size > 100000:
+                            cached_final_vid = candidate
+                            break
+
+            if cached_final_vid is not None:
+                prev_wm = wm_marker_file.read_text(encoding="utf-8").strip() if wm_marker_file.exists() else ""
+                if prev_wm != wm_norm:
+                    print(f"[Pipeline] Watermark setting changed ('{prev_wm}' -> '{wm_norm}'); rebuilding final video...")
+                    cached_final_vid = None
 
             if cached_final_vid is not None and fit_short:
                 cv_dur = get_video_duration(cached_final_vid)
@@ -591,11 +1127,27 @@ class DubbingPipeline:
 
             if cached_final_vid is not None:
                 print(f"[Pipeline] Existing dubbed video found: {cached_final_vid.name}. Skipping processing.")
+                self._record_registry_render(
+                    final_video=cached_final_vid,
+                    title=(cached_meta or {}).get("title", ""),
+                    language=target_lang,
+                    tts_engine=self.tts_engine,
+                    metadata=cached_meta or {},
+                    video_id=registry_video_id,
+                    channel=detected_channel,
+                )
+                self._record_registry_movie(
+                    video_title=clean_slug,
+                    metadata=cached_meta,
+                    video_id=registry_video_id,
+                    channel=detected_channel,
+                    force_lookup=bool(movie or capture_movie_details),
+                )
                 clean_vid_cand = self.clean_dir / f"{clean_slug}_clean.mp4"
                 return {
                     "video_path": clean_vid_cand if clean_vid_cand.exists() else video_path,
                     "raw_srt": self.subtitles_dir / f"{clean_slug}_raw.srt",
-                    "dubbed_srt": self.subtitles_dir / f"{clean_slug}_{lang_tag}.srt",
+                    "dubbed_srt": self.subtitles_dir / f"{clean_slug}_{lang_tag}{style_suffix}{short_suffix}{loop_suffix}.srt",
                     "sfx_track": None,
                     "final_video": cached_final_vid,
                     "metadata": cached_meta or {},
@@ -604,7 +1156,114 @@ class DubbingPipeline:
                 }
 
         # -------------------------------------------------------------
-        # Step 2: Transcribe Video Audio via Faster-Whisper GPU
+        # Step 1.5 (1D): Start CPU/NVENC Movie Crop or Smart Crop at t=0 BEFORE Whisper
+        # so RapidOCR runs in parallel with sequential PyTorch CUDA (Whisper -> DBS-TIGER)
+        # without ever exceeding 4 GB VRAM.
+        # -------------------------------------------------------------
+        normalized_mode = "block_aligned" if fit_short else (dub_mode or "block_aligned").lower()
+        use_single_pass_movie_crop = bool(
+            movie and normalized_mode in ("block_aligned", "block", "blocks", "aligned")
+        )
+        movie_crop_spec_path: Optional[Path] = (
+            self.clean_dir / f"{clean_slug}_moviecrop{ratio_suffix}_spec.json"
+            if use_single_pass_movie_crop
+            else None
+        )
+        inpaint_future = None
+        inpaint_executor = None
+        clean_video_target = None
+        t_clean_start = time.time()
+
+        if movie:
+            movie_crop_video_path = self.clean_dir / f"{clean_slug}_moviecrop{ratio_suffix}.mp4"
+            cached_movie_valid = False
+            if (
+                not force
+                and use_single_pass_movie_crop
+                and movie_crop_spec_path
+                and movie_crop_spec_path.exists()
+            ):
+                try:
+                    spec_d = json.loads(movie_crop_spec_path.read_text(encoding="utf-8"))
+                    cached_movie_valid = (
+                        spec_d.get("output_ratio") == ratio_norm
+                        and str(spec_d.get("source_video", "")) == str(Path(video_path).resolve())
+                    )
+                except Exception:
+                    cached_movie_valid = False
+
+            if cached_movie_valid:
+                print(f"[Pipeline] Existing valid movie-crop single-pass spec found: {movie_crop_spec_path.name}")
+                clean_video_target = video_path
+                timings["4. Movie Edge Caption Crop"] = (0.0, "Cached (Local Disk)")
+            elif not use_single_pass_movie_crop and not force and movie_crop_video_path.exists() and movie_crop_video_path.stat().st_size > 50000:
+                try:
+                    import cv2
+                    from .movie_crop import _is_vertical_aspect, _is_square_aspect
+                    cap_mc = cv2.VideoCapture(str(movie_crop_video_path))
+                    mc_w = int(cap_mc.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    mc_h = int(cap_mc.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    cap_mc.release()
+                    cached_movie_valid = _is_square_aspect(mc_w, mc_h) if ratio_norm == "square" else _is_vertical_aspect(mc_w, mc_h)
+                    if cached_movie_valid:
+                        print(f"[Pipeline] Existing valid movie-cropped video found: {movie_crop_video_path.name}")
+                        clean_video_target = movie_crop_video_path
+                        timings["4. Movie Edge Caption Crop"] = (0.0, "Cached (Local Disk)")
+                except Exception:
+                    cached_movie_valid = False
+
+            if not cached_movie_valid:
+                def _run_movie_crop():
+                    try:
+                        from .movie_crop import process_movie_crop_video
+                        layout_label = "1080x1080 Square" if ratio_norm == "square" else "auto-Reels aspect"
+                        print(f"\n[Track 2: Movie Crop] Fast OCR top/bottom caption detection, crop & {layout_label} check...")
+                        cropped = process_movie_crop_video(
+                            input_video_path=video_path,
+                            output_video_path=movie_crop_video_path,
+                            sample_frames=10,
+                            edge_threshold=0.20,
+                            reels_if_non_vertical=(ratio_norm != "square"),
+                            output_ratio=ratio_norm,
+                            defer_encode=use_single_pass_movie_crop,
+                        )
+                        return cropped
+                    except Exception as e:
+                        print(f"[Track 2: Movie Crop] Warning: Movie crop error ({e}), fallback to original.")
+                        return video_path
+
+                inpaint_executor = ThreadPoolExecutor(max_workers=1)
+                inpaint_future = inpaint_executor.submit(_run_movie_crop)
+                clean_video_target = None
+
+        elif smart_crop:
+            smart_crop_video_path = self.clean_dir / f"{clean_slug}_smartcrop.mp4"
+            if not force and smart_crop_video_path.exists() and smart_crop_video_path.stat().st_size > 50000:
+                print(f"[Pipeline] Existing valid smart-cropped video found: {smart_crop_video_path.name}")
+                clean_video_target = smart_crop_video_path
+                timings["4. Smart Crop & Hook Overlay"] = (0.0, "Cached (Local Disk)")
+            else:
+                def _run_smart_crop():
+                    try:
+                        from .smart_crop import process_smart_crop_video
+                        print("\n[Track 2: Smart Crop] Cropping bottom captions (9:16 expand) + translating top hook to English...")
+                        process_smart_crop_video(
+                            input_video_path=video_path,
+                            output_video_path=smart_crop_video_path,
+                            crop_bottom_ratio=0.15
+                        )
+                        if smart_crop_video_path.exists():
+                            print(f"[Track 2: Smart Crop] Finished smart-cropped video: {smart_crop_video_path.name}")
+                            return smart_crop_video_path
+                        return video_path
+                    except Exception as e:
+                        print(f"[Track 2: Smart Crop] Warning: Smart crop error ({e}), fallback to original.")
+                        return video_path
+
+                inpaint_executor = ThreadPoolExecutor(max_workers=1)
+                inpaint_future = inpaint_executor.submit(_run_smart_crop)
+                clean_video_target = None
+
         # -------------------------------------------------------------
         # Step 2: Transcribe Video Audio via Faster-Whisper GPU
         # -------------------------------------------------------------
@@ -619,13 +1278,9 @@ class DubbingPipeline:
         timings["1. Audio Transcription"] = (time.time() - t_trans, "Local GPU (Faster-Whisper)")
 
         # -------------------------------------------------------------
-        # Step 2.5: Start Background Video Cleaner (Luminance Blur)
+        # Step 2.5: Background Video Cleaner (needs raw_srt, non-movie mode)
         # -------------------------------------------------------------
-        inpaint_future = None
-        inpaint_executor = None
-        t_clean_start = time.time()
-
-        if clean_subtitles:
+        if not movie and not smart_crop and clean_subtitles:
             if video_path.stem.endswith("_clean"):
                 clean_video_path = video_path
             else:
@@ -635,8 +1290,31 @@ class DubbingPipeline:
                     import shutil
                     shutil.copy2(str(legacy_clean_path), str(clean_video_path))
 
+            is_valid_clean = False
             if not force and clean_video_path.exists() and clean_video_path.stat().st_size > 50000:
-                print(f"[Pipeline] Existing clean video found: {clean_video_path.name}")
+                try:
+                    probe_c = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(clean_video_path)], capture_output=True, text=True)
+                    clean_dur = float(probe_c.stdout.strip())
+                    probe_o = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(video_path)], capture_output=True, text=True)
+                    orig_dur = float(probe_o.stdout.strip())
+                    box_json_cand = clean_video_path.with_name(f"{clean_video_path.stem}_box.json")
+                    is_tight_mode = False
+                    if box_json_cand.exists():
+                        try:
+                            is_tight_mode = json.loads(box_json_cand.read_text(encoding="utf-8")).get("mode") == "per_subtitle_tight"
+                        except Exception:
+                            is_tight_mode = False
+                    if abs(clean_dur - orig_dur) <= 2.0 and is_tight_mode:
+                        is_valid_clean = True
+                    elif abs(clean_dur - orig_dur) <= 2.0 and not is_tight_mode:
+                        print(f"[Pipeline] Cached clean video uses legacy wide blur ({clean_video_path.name}). Re-cleaning with tight per-subtitle blur...")
+                    else:
+                        print(f"[Pipeline] Warning: Existing clean video duration ({clean_dur:.2f}s) mismatch with original ({orig_dur:.2f}s)! Re-cleaning...")
+                except Exception:
+                    is_valid_clean = False
+
+            if is_valid_clean:
+                print(f"[Pipeline] Existing valid tight clean video found: {clean_video_path.name}")
                 clean_video_target = clean_video_path
                 timings["4. Subtitle Removal Blur"] = (0.0, "Cached (Local Disk)")
             else:
@@ -646,7 +1324,7 @@ class DubbingPipeline:
                             from tools.remove_subtitles import remove_subtitles
                         except ImportError:
                             from remove_subtitles import remove_subtitles
-                        print("\n[Track 2: Video Cleaner] Running Clause-Sampled Luminance-Suppressed Subtitle Blur in parallel...")
+                        print("\n[Track 2: Video Cleaner] Running Per-Subtitle Tight RapidOCR Blur in parallel...")
                         success = remove_subtitles(
                             input_video=str(video_path),
                             output_video=str(clean_video_path),
@@ -666,42 +1344,101 @@ class DubbingPipeline:
                 inpaint_future = inpaint_executor.submit(_run_cleaner)
                 clean_video_target = None
         else:
-            clean_video_target = video_path
+            if not movie and not smart_crop:
+                clean_video_target = video_path
 
         # -------------------------------------------------------------
-        # Track 1: Audio / Translation / Metadata / TTS
+        # Track 1: Stem Separation -> Narrator/Dialogue Detection -> Translation -> Metadata
         # -------------------------------------------------------------
+        sfx_track = None
+        speech_track = None
+        t_stem = time.time()
+        if preserve_bgm:
+            try:
+                stems = self.separator.separate_audio(
+                    video_path,
+                    output_dir=self.stems_dir,
+                    clean_name=clean_slug,
+                    force=force
+                )
+                sfx_track = stems.get("sfx")
+                speech_track = stems.get("speech")
+                if sfx_track:
+                    print(f"[Pipeline Audio Sync] Isolated Foley SFX track selected: {sfx_track.name}")
+                timings["3. Stem Separation (Meta HTDemucs v4)"] = (time.time() - t_stem, "Local GPU (Meta HTDemucs v4)")
+            except Exception as e:
+                print(f"[Pipeline] Warning: Stem separation failed ({e}). Proceeding with clean voiceover.")
+                timings["3. Stem Separation (Meta HTDemucs v4)"] = (time.time() - t_stem, "Failed/Skipped")
 
-        # Step 3: Translate & Transcreate via Gemini SDK
+        # Step 2.5: Detect Narrator vs In-Scene Character Dialogue
+        translation_source_srt = raw_srt
+        if speech_track and Path(speech_track).exists():
+            try:
+                from .narrator_detector import detect_narrator_and_dialogue
+                narrator_raw_srt = self.subtitles_dir / f"{clean_slug}_narrator_raw.srt"
+                roles_json = self.subtitles_dir / f"{clean_slug}_speaker_roles.json"
+                sfx_diag_out = Path(sfx_track).with_name("sfx_with_dialogue.wav") if sfx_track else None
+                det = detect_narrator_and_dialogue(
+                    raw_srt=raw_srt,
+                    speech_wav=Path(speech_track),
+                    sfx_wav=Path(sfx_track) if sfx_track else None,
+                    narrator_srt_out=narrator_raw_srt,
+                    sfx_with_dialogue_out=sfx_diag_out,
+                    roles_json_out=roles_json,
+                    force=force,
+                )
+                translation_source_srt = Path(det["narrator_srt"])
+                if det.get("sfx_track") and det.get("dialogue_count", 0) > 0:
+                    sfx_track = Path(det["sfx_track"])
+                print(
+                    f"[Pipeline Speaker Detection] Narrator blocks: {det['narrator_count']} | "
+                    f"In-scene Dialogue blocks: {det['dialogue_count']} "
+                    f"({'preserved in audio mix, excluded from narrator dub' if det['dialogue_count'] else 'pure narration'})"
+                )
+            except Exception as det_err:
+                print(f"[Pipeline Speaker Detection] Warning: Detection skipped ({det_err}); using full raw SRT.")
+
+        # Step 3: Translate & Transcreate Narrator SRT via Gemini SDK
         t_translat = time.time()
         effective_target_lang = (
             DEFAULT_TARGET_LANGUAGE if target_lang.strip().lower() in ("hindi", "hi", "hinglish") else target_lang
         )
         lang_tag = "hindi" if target_lang.lower().startswith("hi") or "hinglish" in target_lang.lower() else target_lang.lower()
         style_suffix = f"_{active_style}" if active_style != "viral" else ""
-        dubbed_srt = self.subtitles_dir / f"{clean_slug}_{lang_tag}{style_suffix}.srt"
-        legacy_dubbed_srt = self.output_dir / f"{base_stem}_{lang_tag}{style_suffix}.srt"
+        short_suffix = "_short" if fit_short else ""
+        loop_suffix = "_loop" if loop else ""
+        dubbed_srt = self.subtitles_dir / f"{clean_slug}_{lang_tag}{style_suffix}{short_suffix}{loop_suffix}.srt"
+        legacy_dubbed_srt = self.output_dir / f"{base_stem}_{lang_tag}{style_suffix}{short_suffix}{loop_suffix}.srt"
         if not force and not dubbed_srt.exists() and legacy_dubbed_srt.exists():
             import shutil
             shutil.copy2(str(legacy_dubbed_srt), str(dubbed_srt))
 
         if not force and dubbed_srt.exists() and dubbed_srt.stat().st_size > 100:
-            print(f"[Pipeline] Existing dubbed SRT found ({active_style}): {dubbed_srt.name}. Skipping translation.")
+            print(f"[Pipeline] Existing dubbed SRT found ({active_style}{', short' if fit_short else ''}{', loop' if loop else ''}{', anti-accent' if anti_accent else ''}): {dubbed_srt.name}. Skipping translation.")
             translated_srt = dubbed_srt.read_text(encoding="utf-8")
+            if anti_accent and not str(target_lang or "").strip().lower().startswith("en"):
+                translated_srt = balance_consecutive_english(translated_srt)
+                dubbed_srt.write_text(translated_srt, encoding="utf-8")
             report = {"skipped": True}
             timings["2. Script Transcreation"] = (time.time() - t_translat, "Cached (Local Disk)")
         else:
             translated_srt, report = self.translator.translate_and_rewrite_srt(
-                srt_input=raw_srt,
+                srt_input=translation_source_srt,
                 target_language=effective_target_lang,
                 batch_size=batch_size,
                 temperature=temperature,
                 style=active_style,
-                tts_engine=self.tts_engine
+                tts_engine=self.tts_engine,
+                fit_short=fit_short,
+                max_duration=max_duration,
+                anti_accent=anti_accent,
+                loop=loop,
+                movie=movie,
+                video_title=clean_slug,
             )
             dubbed_srt.write_text(translated_srt, encoding="utf-8")
-            timings["2. Script Transcreation"] = (time.time() - t_translat, f"Cloud API (Gemini - {active_style})")
-            print(f"[Pipeline] Dubbed Devanagari SRT ({active_style}) saved to: {dubbed_srt.name}")
+            timings["2. Script Transcreation"] = (time.time() - t_translat, f"Cloud API (Gemini - {active_style}{', short' if fit_short else ''}{', loop' if loop else ''})")
+            print(f"[Pipeline] Dubbed {target_lang} SRT ({active_style}{', short' if fit_short else ''}{', loop' if loop else ''}{', anti-accent' if anti_accent else ''}) saved to: {dubbed_srt.name}")
 
         # Step 3.5: Generate Catchy Hook, Title, Description, Tags & Hashtags via Gemini (Disabled by default)
         meta_json_file = self.metadata_dir / f"{clean_slug}_{lang_tag}_metadata.json"
@@ -731,11 +1468,14 @@ class DubbingPipeline:
                     if line.strip() and not line.strip().isdigit() and "-->" not in line
                 ])
                 try:
+                    detected_channel = channel_name or (video_path.parent.name if video_path.parent.name.lower() not in ("input", "clean_videos", "videos", "output", ".") else "")
                     meta = self.translator.generate_metadata(
                         script_text=clean_script,
                         target_language=target_lang,
                         original_title=clean_slug,
-                        temperature=temperature
+                        temperature=temperature,
+                        channel_name=detected_channel,
+                        movie=movie
                     )
                 except Exception as e:
                     print(f"[Pipeline] Warning: Metadata generation error ({e}). Using fallback metadata.")
@@ -758,39 +1498,22 @@ class DubbingPipeline:
             print("[Pipeline] Metadata generation skipped.")
 
         # -------------------------------------------------------------
-        # Step 4: Extract Stems via DBS-TIGER (Preserve Isolated Foley SFX, Exclude BGM)
+        # Step 4: (Stems & Speaker Role Detection already completed before translation)
         # -------------------------------------------------------------
-        sfx_track = None
-        t_stem = time.time()
-        if preserve_bgm:
-            try:
-                stems = self.separator.separate_audio(
-                    video_path,
-                    output_dir=self.stems_dir,
-                    clean_name=clean_slug,
-                    force=force
-                )
-                # Strictly use isolated Foley SFX (sfx.wav) from DBS-TIGER-DnR so original Chinese music is excluded
-                sfx_track = stems.get("sfx")
-                if sfx_track:
-                    print(f"[Pipeline Audio Sync] Isolated Foley SFX track selected: {sfx_track.name}")
-                timings["3. Stem Separation (DBS-TIGER-DnR)"] = (time.time() - t_stem, "Local GPU (DBS-TIGER-DnR)")
-            except Exception as e:
-                print(f"[Pipeline] Warning: Stem separation failed ({e}). Proceeding with clean voiceover.")
-                timings["3. Stem Separation (DBS-TIGER-DnR)"] = (time.time() - t_stem, "Failed/Skipped")
 
         # -------------------------------------------------------------
         # Step 5: Wait for Parallel Video Cleaner & Dub Final Video
         # -------------------------------------------------------------
         if inpaint_future is not None:
-            print("\n[Pipeline Track Sync] Waiting for Parallel Video Cleaner (Luminance Blur) track to complete...")
+            stage_label = "4. Movie Edge Caption Crop" if movie else ("4. Smart Crop & Hook Overlay" if smart_crop else "4. Subtitle Removal Blur")
+            print(f"\n[Pipeline Track Sync] Waiting for Parallel Video Processor ({stage_label}) to complete...")
             try:
-                video_for_dubbing = inpaint_future.result(timeout=600)
-                timings["4. Subtitle Removal Blur"] = (time.time() - t_clean_start, "Local GPU (RapidOCR, Parallel)")
+                video_for_dubbing = inpaint_future.result(timeout=900)
+                timings[stage_label] = (time.time() - t_clean_start, "Local OCR + FFmpeg Crop" if movie else "Local GPU (Parallel)")
             except Exception as e:
                 print(f"[Pipeline Track Sync] Video cleaner future failed ({e}), using original video.")
                 video_for_dubbing = video_path
-                timings["4. Subtitle Removal Blur"] = (time.time() - t_clean_start, "Fallback to Original")
+                timings[stage_label] = (time.time() - t_clean_start, "Fallback to Original")
             finally:
                 if inpaint_executor:
                     inpaint_executor.shutdown(wait=False)
@@ -809,11 +1532,13 @@ class DubbingPipeline:
                 try:
                     b_data = json.loads(bc.read_text(encoding="utf-8"))
                     if "y_center" in b_data:
-                        detected_margin_v = max(180, 1920 - int(b_data["y_center"]) - 65)
+                        detected_margin_v = max(80, 1920 - int(b_data["y_center"]) - 65)
                         print(f"[Pipeline Subtitle Alignment] Loaded dynamic placement: MarginV={detected_margin_v} (Center Y: {b_data.get('y_center')}px) from {bc.name}")
+                        if is_debug:
+                            print(f"[Debug] Box Metadata: {b_data}")
                         break
                     elif "margin_v" in b_data:
-                        detected_margin_v = max(180, int(b_data["margin_v"]) - 30)
+                        detected_margin_v = max(80, int(b_data["margin_v"]) - 30)
                         print(f"[Pipeline Subtitle Alignment] Loaded dynamic placement: MarginV={detected_margin_v} (Adjusted down for visual center) from {bc.name}")
                         break
                 except Exception:
@@ -821,28 +1546,47 @@ class DubbingPipeline:
 
         # Final video placed STRICTLY in final_videos/ with clean filename
         style_suffix = f"_{active_style}" if active_style != "viral" else ""
+        short_suffix = "_short" if fit_short else ""
+        loop_tag = "_loop" if loop else ""
+        mirror_suffix = "_mirror" if mirror else ""
+        smartcrop_suffix = "_smartcrop" if smart_crop else ""
+        movie_suffix = "_movie" if movie else ""
+        normalized_mode = "block_aligned" if fit_short else (dub_mode or "block_aligned").lower()
+        mode_suffix = "_paragraph" if normalized_mode in ("paragraph", "single_narrator", "narrator", "continuous") else ""
+
         if "chirp" in self.tts_engine.lower():
             tts_suffix = "_chirp"
+        elif "kokoro" in self.tts_engine.lower():
+            tts_suffix = "_kokoro"
         elif "elevenlabs" in self.tts_engine.lower() or "11labs" in self.tts_engine.lower():
             tts_suffix = "_elevenlabs"
         elif "google" in self.tts_engine.lower() or "gemini" in self.tts_engine.lower():
             tts_suffix = "_google"
+        elif "sarvam" in self.tts_engine.lower() or "bulbul" in self.tts_engine.lower():
+            tts_suffix = "_sarvam"
         else:
             tts_suffix = ""
-        final_video = self.final_dir / f"{clean_slug}_{lang_tag}{style_suffix}{tts_suffix}_dubbed.mp4"
+        final_video = self.final_dir / f"{clean_slug}_{lang_tag}{style_suffix}{short_suffix}{loop_tag}{mode_suffix}{mirror_suffix}{smartcrop_suffix}{movie_suffix}{ratio_suffix}{tts_suffix}_dubbed.mp4"
 
-        # Resolve Copyright-Free Background Music from assets/background_audio/
-        bgm_free_track = self._resolve_royalty_free_bgm()
-        if bgm_free_track:
-            print(f"[Pipeline Audio Sync] Royalty-Free BGM selected: {bgm_free_track.name}")
+        # Resolve Copyright-Free Background Music (unless disable_bgm is set — keeps SFX only)
+        if disable_bgm:
+            bgm_free_track = None
+            print("[Pipeline Audio Sync] Background Music disabled (SFX + Voiceover only).")
+        else:
+            bgm_free_track = self._resolve_royalty_free_bgm(movie=movie)
+            if bgm_free_track:
+                print(f"[Pipeline Audio Sync] Royalty-Free BGM selected: {bgm_free_track.name} (Volume: {effective_bgm_volume:.2f}x)")
 
-        normalized_mode = (dub_mode or "block_aligned").lower()
         t_dub = time.time()
+        video_work_dir = None
 
         if normalized_mode in ("block_aligned", "block", "blocks", "aligned"):
-            print(f"\n[Pipeline Dub Mode] Engaging Block-Aligned Dubbing Engine ({active_style.upper()}, Uniform tempo, max 200ms pauses, 0s tail silence)...")
+            mode_desc = f"{active_style.upper()}{', MIRRORED' if mirror else ''}{', SMART-CROP' if smart_crop else ''}{', MOVIE' if movie else ''}{', SQUARE 1:1' if ratio_norm == 'square' else ''}"
+            effective_movie_tts_speed = (base_speed if base_speed != 1.0 else None)
+            pause_desc = "original scene timing, zero video compaction" if movie else "Uniform tempo, max 200ms pauses, 0s tail silence"
+            print(f"\n[Pipeline Dub Mode] Engaging Block-Aligned Dubbing Engine ({mode_desc}, {pause_desc})...")
             from .block_aligner import align_video_and_audio_blocks
-            video_work_dir = self.stems_dir / f"block_align_{clean_slug}"
+            video_work_dir = self.stems_dir / f"block_align_{clean_slug}_{lang_tag}{movie_suffix}{ratio_suffix}"
             final_video = align_video_and_audio_blocks(
                 clean_video_path=Path(video_for_dubbing),
                 srt_path=Path(dubbed_srt),
@@ -852,15 +1596,31 @@ class DubbingPipeline:
                 voice=selected_voice,
                 engine=self.tts_engine,
                 work_dir=video_work_dir,
-                max_silence_sec=0.20
+                max_silence_sec=0.20,
+                bgm_volume=effective_bgm_volume,
+                mirror=mirror,
+                smart_crop=smart_crop,
+                burn_subtitles=True,
+                tts_speed=effective_movie_tts_speed,
+                target_lang=target_lang,
+                movie=movie,
+                watermark=clean_watermark or None,
+                ratio=ratio_norm,
+                disable_bgm=disable_bgm,
+                allow_fallback=allow_tts_fallback,
+                crop_spec_path=movie_crop_spec_path,
             )
-            if "_elevenlabs" in Path(final_video).name:
-                self.tts_engine = "elevenlabs"
+            fv_name = Path(final_video).name
+            for tag_eng in ("elevenlabs", "google", "sarvam", "chirp", "kokoro"):
+                if f"_{tag_eng}" in fv_name:
+                    self.tts_engine = tag_eng
+                    break
             timings["5. Voiceover Synthesis & Mux"] = (time.time() - t_dub, f"Block-Aligned {self.tts_engine.capitalize()} + NVENC")
 
 
         elif normalized_mode in ("paragraph", "single_narrator", "narrator", "continuous"):
-            print(f"\n[Pipeline Dub Mode] Engaging Paragraph Continuous Dubbing Engine ({active_style.upper()}, Method 1 Infinite Loop, 0s tail silence)...")
+            mode_desc = f"{active_style.upper()}{', MIRRORED' if mirror else ''}{', SMART-CROP' if smart_crop else ''}"
+            print(f"\n[Pipeline Dub Mode] Engaging Paragraph Continuous Dubbing Engine ({mode_desc}, 0s tail silence)...")
             from dub_single_narrator import run_single_narrator_pipeline
             run_single_narrator_pipeline(
                 video_path=str(video_for_dubbing),
@@ -876,7 +1636,10 @@ class DubbingPipeline:
                 bg_music_path=bgm_free_track,
                 work_dir=self.stems_dir,
                 margin_v=detected_margin_v,
-                style=active_style
+                style=active_style,
+                loop=loop,
+                mirror=mirror,
+                smart_crop=smart_crop
             )
             timings["5. Voiceover Synthesis & Mux"] = (time.time() - t_dub, f"Paragraph Single-Narrator + NVENC")
 
@@ -926,6 +1689,16 @@ class DubbingPipeline:
                 else:
                     raise
 
+        if wm_norm and normalized_mode not in ("block_aligned", "block", "blocks", "aligned") and final_video.exists():
+            from .watermark import apply_watermark_to_video
+            wm_tmp = final_video.with_name(f"{final_video.stem}_wmtmp.mp4")
+            apply_watermark_to_video(final_video, wm_tmp, wm_norm, work_dir=self.stems_dir)
+            wm_tmp.replace(final_video)
+        try:
+            wm_marker_file.write_text(wm_norm, encoding="utf-8")
+        except Exception:
+            pass
+
         # -------------------------------------------------------------
         # Step 6: Collect Concurrent Metadata Result & Rename Final Video
         # -------------------------------------------------------------
@@ -937,8 +1710,9 @@ class DubbingPipeline:
                 timings["6. Social Metadata"] = (time.time() - t_meta_wait, "Cloud API (Gemini, Parallel)")
             except Exception as e:
                 print(f"[Pipeline] Warning: Metadata background task failed or timed out ({e}). Using fallback.")
+                fallback_lang_tag = "3D Animation In English" if str(target_lang or "").strip().lower().startswith("en") else "3D Animation In Hindi"
                 metadata = {
-                    "title": f"{clean_slug} (3D Animation In Hindi) #shorts",
+                    "title": f"{clean_slug} ({fallback_lang_tag}) #shorts",
                     "description": "",
                     "tags": ["shorts", "viral", "video"],
                     "hashtags": ["#Shorts", "#Viral"]
@@ -956,8 +1730,9 @@ class DubbingPipeline:
             print(f" Hashtags    : {' '.join(metadata.get('hashtags', [])[:6])}")
             print("-" * 55 + "\n")
         else:
+            fallback_lang_tag = "3D Animation In English" if str(target_lang or "").strip().lower().startswith("en") else "3D Animation In Hindi"
             metadata = {
-                "title": f"{clean_slug} (3D Animation In Hindi) #shorts",
+                "title": f"{clean_slug} ({fallback_lang_tag}) #shorts",
                 "description": "",
                 "tags": [],
                 "hashtags": []
@@ -968,7 +1743,13 @@ class DubbingPipeline:
         if metadata and metadata.get("title") and final_video.exists():
             clean_title_fn = sanitize_title_for_filename(metadata["title"])
             if clean_title_fn:
-                titled_video = final_video.with_name(f"{clean_title_fn}.mp4")
+                ratio_tag = " Square" if ratio_norm == "square" else ""
+                movie_tag = " Movie" if movie else ""
+                crop_tag = " Smart Crop" if smart_crop else ""
+                mirror_tag = " Mirrored" if mirror else ""
+                mode_tag = f" {normalized_mode.replace('_', ' ').title()}" if normalized_mode != "block_aligned" else ""
+                var_tag = f" [{active_style.title()}{mode_tag}{mirror_tag}{crop_tag}{movie_tag}{ratio_tag}]" if (active_style != "viral" or normalized_mode != "block_aligned" or mirror or smart_crop or movie or ratio_norm != "reel") else ""
+                titled_video = final_video.with_name(f"{clean_title_fn}{var_tag}.mp4")
                 if final_video != titled_video:
                     if titled_video.exists():
                         try:
@@ -982,14 +1763,104 @@ class DubbingPipeline:
                     except Exception as e:
                         print(f"[Pipeline] Warning: Could not rename final video to title ({e})")
 
-        # Mirror final dubbed video to Google Drive final_videos/ if mounted
-        drive_base = Path("H:/My Drive/douyin")
-        if drive_base.exists() and final_video.exists():
-            drive_final_dir = drive_base / "final_videos"
-            drive_final_dir.mkdir(parents=True, exist_ok=True)
-            import shutil
-            shutil.copy2(str(final_video), str(drive_final_dir / final_video.name))
-            print(f"[Google Drive Sync] Synced final dubbed video to: {drive_final_dir / final_video.name}")
+        # Persist the render (also covers cached/no-metadata runs)
+        self._record_registry_render(
+            final_video=final_video,
+            title=str((metadata or {}).get("title") or clean_slug),
+            language=target_lang,
+            tts_engine=self.tts_engine,
+            metadata=metadata or {},
+            video_id=registry_video_id,
+            channel=detected_channel,
+        )
+
+        # Identify and link the movie (name/year/genre/synopsis) for this video
+        movie_details = self._record_registry_movie(
+            video_title=clean_slug,
+            metadata=metadata,
+            video_id=registry_video_id,
+            source_ref=source_ref if source_ref.lower().startswith(("http://", "https://")) else "",
+            channel=detected_channel,
+            force_lookup=bool(movie or capture_movie_details),
+        )
+        if movie_details and enable_metadata and meta_json_file and metadata is not None:
+            try:
+                meta_json_file.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+
+        # Clean up per-video intermediate temp files (moviecrop, clean plates, stems, block_align slices)
+        if not is_debug:
+            self._cleanup_temp_files(
+                clean_slug=clean_slug,
+                clean_video_target=clean_video_target,
+                video_for_dubbing=video_for_dubbing,
+                sfx_track=sfx_track,
+                video_work_dir=video_work_dir,
+            )
+
+        # -------------------------------------------------------------
+        # Optional Thumbnail Generation (--thumbnail / -thumb)
+        # -------------------------------------------------------------
+        generated_thumbnail_path = None
+        if thumbnail:
+            try:
+                from .thumbnail_generator import generate_video_thumbnail
+                thumb_target = final_video if (final_video and final_video.exists()) else video_path
+                script_sample = ""
+                if dubbed_srt and Path(dubbed_srt).exists():
+                    script_sample = "\n".join([
+                        line.strip()
+                        for line in Path(dubbed_srt).read_text(encoding="utf-8").splitlines()
+                        if line.strip() and not line.strip().isdigit() and "-->" not in line
+                    ][:15])
+                generated_thumbnail_path = generate_video_thumbnail(
+                    video_path=thumb_target,
+                    script_text=script_sample,
+                    title=str((metadata or {}).get("title") or clean_slug),
+                    output_dir=self.thumbnails_dir,
+                    output_name=final_video.stem if final_video else clean_slug,
+                )
+                if generated_thumbnail_path and generated_thumbnail_path.exists():
+                    print(f"[Thumbnail Generator] Thumbnail created at: {generated_thumbnail_path}")
+            except Exception as thumb_err:
+                print(f"[Thumbnail Generator Warning] Failed to generate thumbnail: {thumb_err}")
+
+        # Mirror final dubbed video to Google Drive final_videos/ only when running standalone (not inside run_folder)
+        drive_video_path = None
+        if not channel_name:
+            drive_base = resolve_google_drive_base()
+            if drive_base and drive_base.exists() and final_video.exists():
+                drive_final_dir = drive_base / "final_videos"
+                drive_final_dir.mkdir(parents=True, exist_ok=True)
+                import shutil
+                try:
+                    dest_drive = drive_final_dir / final_video.name
+                    shutil.copy2(str(final_video), str(dest_drive))
+                    drive_video_path = dest_drive
+                    print(f"[Google Drive Sync] Synced final dubbed video to: {dest_drive}")
+                    drive_thumbnail_path = None
+                    if generated_thumbnail_path and generated_thumbnail_path.exists():
+                        drive_thumb_dest = drive_final_dir / generated_thumbnail_path.name
+                        shutil.copy2(str(generated_thumbnail_path), str(drive_thumb_dest))
+                        drive_thumbnail_path = drive_thumb_dest
+                        print(f"[Google Drive Sync] Synced thumbnail to: {drive_thumb_dest}")
+                    self._record_registry_drive(
+                        drive_path=dest_drive,
+                        video_id=registry_video_id,
+                        final_video=final_video,
+                        thumbnail_path=drive_thumbnail_path,
+                    )
+                    if move_to_drive and dest_drive.exists() and dest_drive.stat().st_size == final_video.stat().st_size:
+                        freed_mb = final_video.stat().st_size / (1024 * 1024)
+                        final_video.unlink()
+                        print(f"[Disk Saver] Deleted local final video after Drive transfer ({freed_mb:.1f} MB freed): {final_video.name}")
+                        if delete_input and video_path.exists() and str(video_path.resolve()).startswith(str(self.input_dir.resolve())):
+                            in_mb = video_path.stat().st_size / (1024 * 1024)
+                            video_path.unlink()
+                            print(f"[Disk Saver] Deleted local downloaded source video ({in_mb:.1f} MB freed): {video_path.name}")
+                except Exception as sync_err:
+                    print(f"[Google Drive Sync Warning] Could not sync to Drive ({sync_err}). Local video kept at: {final_video}")
 
         total_elapsed = time.time() - pipeline_t0
         print("\n" + "=" * 70)
@@ -1013,22 +1884,30 @@ class DubbingPipeline:
             "dubbed_srt": dubbed_srt,
             "sfx_track": sfx_track,
             "final_video": final_video,
+            "drive_video": drive_video_path,
+            "thumbnail": generated_thumbnail_path,
             "metadata": metadata,
             "clean_title": clean_slug,
-            "translation_report": report
+            "translation_report": report,
+            "tts_engine_used": self.tts_engine,
         }
 
-    def _resolve_royalty_free_bgm(self) -> Optional[Path]:
-        """Finds a royalty-free background music track from assets/background_audio/."""
-        bg_dirs = [
+    def _resolve_royalty_free_bgm(self, movie: bool = False) -> Optional[Path]:
+        """Finds a background music track randomly (dedicated 'movie explanation/' folder in --movie mode)."""
+        import random
+        root_dir = Path(__file__).resolve().parent.parent
+        base_dirs = [
+            Path("Background Audios"),
+            root_dir / "Background Audios",
             Path("assets/background_audio"),
-            Path(__file__).resolve().parent.parent / "assets/background_audio",
+            root_dir / "assets/background_audio",
         ]
+        bg_dirs = ([d / "movie explanation" for d in base_dirs] + base_dirs) if movie else base_dirs
         for bd in bg_dirs:
-            if bd.exists():
+            if bd.exists() and bd.is_dir():
                 tracks = sorted([f for f in bd.glob("*.mp3")] + [f for f in bd.glob("*.wav")])
                 if tracks:
-                    return tracks[0]
+                    return random.choice(tracks)
         return None
 
     def run_folder(
@@ -1044,11 +1923,24 @@ class DubbingPipeline:
         preserve_bgm: bool = True,
         clean_subtitles: bool = True,
         remove_watermark: bool = False,
-        bgm_volume: float = 1.05,
+        bgm_volume: Optional[float] = None,
         enable_metadata: bool = True,
         style: str = "viral",
         fit_short: bool = False,
-        max_duration: float = 58.0
+        max_duration: float = 58.0,
+        anti_accent: bool = False,
+        loop: bool = False,
+        mirror: bool = False,
+        smart_crop: bool = False,
+        movie: bool = False,
+        ratio: str = "reel",
+        watermark: Optional[str] = None,
+        disable_bgm: bool = False,
+        allow_tts_fallback: bool = True,
+        move_to_drive: bool = False,
+        delete_input: bool = False,
+        thumbnail: bool = False,
+        capture_movie_details: bool = False,
     ) -> Dict[str, Any]:
         """
         Batch-process an entire folder of videos:
@@ -1136,7 +2028,52 @@ class DubbingPipeline:
             print(f" Total Videos to Process: {len(video_files)}")
             print(f" Output Folder: {target_out_dir}")
             print(f" Master Metadata JSON: {metadata_path}")
+            free_gb = shutil.disk_usage(target_out_dir).free / (1024 ** 3)
+            print(f" Local Free Disk Space: {free_gb:.2f} GB")
+            if move_to_drive:
+                print(f" Auto-Offload Mode: Transfer each video to Google Drive and delete local video files")
             print("#" * 65 + "\n")
+
+            drive_base = resolve_google_drive_base()
+            drive_target_dir = (drive_base / cur_folder.name) if (drive_base and drive_base.exists()) else None
+            if drive_target_dir is not None:
+                drive_target_dir.mkdir(parents=True, exist_ok=True)
+            transferred_drive_names = set()
+
+            def _write_master_metadata(results_so_far: List[Dict[str, Any]]):
+                master_videos_list = []
+                for r in results_so_far:
+                    fpath_cand = Path(r["final_video"]) if r.get("final_video") else None
+                    has_output = bool(fpath_cand and (fpath_cand.exists() or r.get("drive_video")))
+                    if not has_output:
+                        continue
+                    meta = r.get("metadata", {})
+                    if not meta and r.get("clean_title"):
+                        cand_meta = self.metadata_dir / f"{r['clean_title']}_hindi_metadata.json"
+                        if cand_meta.exists():
+                            try:
+                                meta = json.loads(cand_meta.read_text(encoding="utf-8"))
+                            except Exception:
+                                meta = {}
+
+                    video_title = meta.get("title", fpath_cand.stem if fpath_cand else "Video")
+                    video_desc = meta.get("description", "")
+                    if len(video_desc) >= 5000:
+                        video_desc = video_desc[:4950].rsplit(",", 1)[0].rstrip()
+                    seo_tags = clean_youtube_tags(meta.get("tags"), title=video_title)
+
+                    master_videos_list.append({
+                        "title": video_title,
+                        "description": video_desc,
+                        "tags": seo_tags
+                    })
+
+                master_json_data = {
+                    "number_of_videos": len(master_videos_list),
+                    "videos": master_videos_list
+                }
+                metadata_path.write_text(json.dumps(master_json_data, ensure_ascii=False, indent=2), encoding="utf-8")
+                return master_videos_list
 
             folder_results = []
             for idx, vid in enumerate(video_files, start=1):
@@ -1146,17 +2083,37 @@ class DubbingPipeline:
                 self.output_dir = target_out_dir
                 # Check key pool before each video:
                 # If ElevenLabs was selected but keys ran out of quota, automatically switch to Google Gemini Flash 3.8
-                if self.tts_engine in ("elevenlabs", "eleven_labs", "11labs"):
-                    if not get_active_elevenlabs_keys() and get_active_gemini_keys():
-                        print(f"\n[Batch Folder Fallback] ElevenLabs keys exhausted! Switching batch engine to Google Gemini Flash 3.8 TTS...")
-                        self.tts_engine = "google"
-                elif self.tts_engine in ("google", "gemini"):
-                    if not get_active_gemini_keys() and get_active_elevenlabs_keys():
-                        print(f"\n[Batch Folder Fallback] Google Gemini keys exhausted! Switching batch engine to ElevenLabs (eleven_v4)...")
-                        self.tts_engine = "elevenlabs"
+                if self.tts_engine in ("elevenlabs", "eleven_labs", "11labs") and allow_tts_fallback:
+                    if not get_active_elevenlabs_keys():
+                        if get_active_gemini_keys():
+                            print("\n[Batch Folder Fallback] ElevenLabs keys exhausted! Switching batch engine to Google Gemini Flash 3.8 TTS...")
+                            self.tts_engine = "google"
+                        elif get_active_sarvam_keys():
+                            print("\n[Batch Folder Fallback] ElevenLabs & Gemini exhausted! Switching batch engine to Sarvam Bulbul V4...")
+                            self.tts_engine = "sarvam"
+                        else:
+                            print("\n[Batch Folder Fallback] Switching batch engine to Local Kokoro TTS...")
+                            self.tts_engine = "kokoro"
+                elif self.tts_engine in ("google", "gemini") and allow_tts_fallback:
+                    if not get_active_gemini_keys():
+                        if get_active_sarvam_keys():
+                            print("\n[Batch Folder Fallback] Google Gemini keys exhausted! Switching batch engine to Sarvam Bulbul V4...")
+                            self.tts_engine = "sarvam"
+                        else:
+                            print("\n[Batch Folder Fallback] Switching batch engine to Local Kokoro TTS...")
+                            self.tts_engine = "kokoro"
+                elif self.tts_engine in ("sarvam", "sarvamai") and allow_tts_fallback:
+                    if not get_active_sarvam_keys():
+                        print("\n[Batch Folder Fallback] Sarvam keys exhausted! Switching batch engine to Local Kokoro TTS...")
+                        self.tts_engine = "kokoro"
+                registry_video_id = self._record_registry_download(
+                    source_url="",
+                    local_path=vid,
+                    channel=cur_folder.name,
+                    batch=cur_folder.name,
+                )
                 try:
                     res = self.run(
-
                         url_or_file=str(vid),
                         target_lang=target_lang,
                         voice=voice,
@@ -1172,10 +2129,109 @@ class DubbingPipeline:
                         enable_metadata=enable_metadata,
                         style=style,
                         fit_short=fit_short,
-                        max_duration=max_duration
+                        max_duration=max_duration,
+                        channel_name=cur_folder.name,
+                        anti_accent=anti_accent,
+                        loop=loop,
+                        mirror=mirror,
+                        smart_crop=smart_crop,
+                        movie=movie,
+                        ratio=ratio,
+                        watermark=watermark,
+                        disable_bgm=disable_bgm,
+                        allow_tts_fallback=allow_tts_fallback,
+                        thumbnail=thumbnail,
+                        capture_movie_details=capture_movie_details,
                     )
 
+                    self._record_registry_render(
+                        final_video=res.get("final_video"),
+                        title=str((res.get("metadata") or {}).get("title") or res.get("clean_title") or ""),
+                        language=target_lang,
+                        tts_engine=str(res.get("tts_engine_used") or self.tts_engine),
+                        metadata=res.get("metadata") or {},
+                        video_id=registry_video_id,
+                        source_url=str(vid),
+                        channel=cur_folder.name,
+                        batch=cur_folder.name,
+                    )
+                    self._record_registry_movie(
+                        video_title=str(res.get("clean_title") or ""),
+                        metadata=res.get("metadata") or {},
+                        video_id=registry_video_id,
+                        source_ref=str(vid),
+                        channel=cur_folder.name,
+                        batch=cur_folder.name,
+                        force_lookup=bool(movie or capture_movie_details)
+                        and not (res.get("metadata") or {}).get("movie_name"),
+                    )
+
+                    if move_to_drive and res.get("final_video"):
+                        fpath = Path(res["final_video"])
+                        if fpath.exists():
+                            transferred_ok = False
+                            if drive_target_dir is not None:
+                                dest_video = drive_target_dir / fpath.name
+                                shutil.copy2(str(fpath), str(dest_video))
+                                if dest_video.exists() and dest_video.stat().st_size == fpath.stat().st_size:
+                                    res["drive_video"] = str(dest_video)
+                                    transferred_drive_names.add(fpath.name)
+                                    transferred_ok = True
+                                    print(f"  [Drive Offload] Transferred to Drive: {dest_video}")
+                                    drive_thumb_dest = None
+                                    if res.get("thumbnail"):
+                                        tpath = Path(res["thumbnail"])
+                                        if tpath.exists():
+                                            dest_thumb = drive_target_dir / tpath.name
+                                            shutil.copy2(str(tpath), str(dest_thumb))
+                                            drive_thumb_dest = dest_thumb
+                                            print(f"  [Drive Offload] Transferred thumbnail to Drive: {dest_thumb}")
+                                    self._record_registry_drive(
+                                        drive_path=dest_video,
+                                        final_video=fpath,
+                                        thumbnail_path=drive_thumb_dest,
+                                        video_id=registry_video_id,
+                                        source_url=str(vid),
+                                    )
+                            else:
+                                from .gdrive_uploader import GoogleDriveUploader
+                                uploader = GoogleDriveUploader()
+                                drive_folder = uploader.get_or_create_subfolder(cur_folder.name)
+                                uploaded = uploader.upload_file(fpath, folder_id=drive_folder["id"], skip_if_exists=False)
+                                file_id = uploaded.get("id", "")
+                                link = uploaded.get("webViewLink") or (
+                                    f"https://drive.google.com/file/d/{file_id}/view" if file_id else ""
+                                )
+                                res["drive_video"] = link or file_id
+                                transferred_drive_names.add(fpath.name)
+                                transferred_ok = True
+                                print(f"  [Drive API Offload] Uploaded to Drive: {fpath.name}")
+                                self._record_registry_drive(
+                                    drive_path=Path("douyin") / cur_folder.name / fpath.name,
+                                    final_video=fpath,
+                                    link=link,
+                                    file_id=file_id,
+                                    thumbnail_path=res.get("thumbnail"),
+                                    video_id=registry_video_id,
+                                    source_url=str(vid),
+                                )
+
+                            if transferred_ok:
+                                freed_mb = fpath.stat().st_size / (1024 * 1024)
+                                fpath.unlink()
+                                print(f"  [Disk Saver] Deleted local output video ({freed_mb:.1f} MB freed): {fpath.name}")
+                                if delete_input and vid.exists():
+                                    in_mb = vid.stat().st_size / (1024 * 1024)
+                                    vid.unlink()
+                                    print(f"  [Disk Saver] Deleted local source video ({in_mb:.1f} MB freed): {vid.name}")
+                                free_gb_now = shutil.disk_usage(target_out_dir).free / (1024 ** 3)
+                                print(f"  [Disk Space] Free space remaining: {free_gb_now:.2f} GB")
+
                     folder_results.append(res)
+                    if move_to_drive:
+                        _write_master_metadata(folder_results)
+                        if drive_target_dir is not None and metadata_path.exists():
+                            shutil.copy2(str(metadata_path), str(drive_target_dir / "metadata.json"))
                 except Exception as e:
                     print(f"[Pipeline ERROR] Failed processing video '{vid.name}': {e}")
                     import traceback
@@ -1186,56 +2242,39 @@ class DubbingPipeline:
             # - titles of the videos
             # - descriptions of the videos
             # - tags (up to 3 high-relevance SEO tags for YouTube)
-            master_videos_list = []
-            for r in folder_results:
-                if not (r.get("final_video") and Path(r["final_video"]).exists()):
-                    continue
-                meta = r.get("metadata", {})
-                if not meta and r.get("clean_title"):
-                    cand_meta = self.metadata_dir / f"{r['clean_title']}_hindi_metadata.json"
-                    if cand_meta.exists():
-                        try:
-                            meta = json.loads(cand_meta.read_text(encoding="utf-8"))
-                        except Exception:
-                            meta = {}
-
-                video_title = meta.get("title", Path(r["final_video"]).stem)
-                video_desc = meta.get("description", "")
-                if len(video_desc) >= 5000:
-                    video_desc = video_desc[:4950].rsplit(",", 1)[0].rstrip()
-                seo_tags = clean_youtube_tags(meta.get("tags"), title=video_title)
-
-                master_videos_list.append({
-                    "title": video_title,
-                    "description": video_desc,
-                    "tags": seo_tags
-                })
-
-            master_json_data = {
-                "number_of_videos": len(master_videos_list),
-                "videos": master_videos_list
-            }
-            metadata_path.write_text(json.dumps(master_json_data, ensure_ascii=False, indent=2), encoding="utf-8")
+            master_videos_list = _write_master_metadata(folder_results)
             print(f"\n[Pipeline Master Metadata] Successfully wrote master metadata.json ({len(master_videos_list)} videos with SEO tags) to: {metadata_path}")
 
             # Google Drive Synchronization:
             # The folder uploaded to Drive only has the final output videos with Title filenames,
             # and strictly one master JSON file carrying number_of_videos, titles, descriptions, and SEO tags.
-            drive_base = Path("H:/My Drive/douyin")
-            if drive_base.exists():
-                drive_target_dir = drive_base / cur_folder.name
-                drive_target_dir.mkdir(parents=True, exist_ok=True)
+            if drive_target_dir is not None:
                 print(f"\n[Google Drive Folder Sync] Synchronizing folder '{cur_folder.name}' to Drive: {drive_target_dir}")
 
-                allowed_files = set()
-                # 1. Sync final output videos
+                allowed_files = set(transferred_drive_names)
+                # 1. Sync final output videos not already offloaded
                 for r in folder_results:
                     fpath = Path(r["final_video"])
+                    if fpath.name in transferred_drive_names:
+                        allowed_files.add(fpath.name)
+                        continue
                     if fpath.exists():
                         dest_video = drive_target_dir / fpath.name
                         shutil.copy2(str(fpath), str(dest_video))
                         allowed_files.add(fpath.name)
                         print(f"  [Drive Sync Video] Synced final output video: {fpath.name}")
+                        thumb_dest = None
+                        if r.get("thumbnail"):
+                            thumb_src = Path(r["thumbnail"])
+                            if thumb_src.exists():
+                                thumb_dest = drive_target_dir / thumb_src.name
+                                shutil.copy2(str(thumb_src), str(thumb_dest))
+                                allowed_files.add(thumb_src.name)
+                        self._record_registry_drive(
+                            drive_path=dest_video,
+                            final_video=fpath,
+                            thumbnail_path=thumb_dest,
+                        )
 
                 # 2. Sync single master metadata.json
                 if metadata_path.exists():
@@ -1255,6 +2294,22 @@ class DubbingPipeline:
                                 print(f"  [Drive Cleanup] Removed extraneous subfolder: {item.name}")
                         except Exception as e:
                             print(f"  [Drive Cleanup Warning] Could not remove {item.name}: {e}")
+            else:
+                try:
+                    from .gdrive_uploader import GoogleDriveUploader
+                    print(f"\n[Google Drive API Upload] Mounted Drive folder not found; uploading '{cur_folder.name}' via Google Drive API...")
+                    uploader = GoogleDriveUploader()
+                    drive_folder = uploader.get_or_create_subfolder(cur_folder.name)
+                    folder_id = drive_folder["id"]
+                    for r in folder_results:
+                        fpath = Path(r["final_video"])
+                        if fpath.name not in transferred_drive_names and fpath.exists():
+                            uploader.upload_file(fpath, folder_id=folder_id, skip_if_exists=False)
+                    if metadata_path.exists():
+                        uploader.upload_file(metadata_path, folder_id=folder_id, skip_if_exists=False)
+                    print(f"  [Google Drive API Upload] Uploaded batch '{cur_folder.name}' -> {drive_folder.get('webViewLink', folder_id)}")
+                except Exception as e:
+                    print(f"  [Google Drive Upload Warning] Skipping Drive upload (mounted Drive unavailable and API upload failed: {e})")
 
             results[cur_folder.name] = {
                 "output_dir": target_out_dir,
@@ -1278,13 +2333,27 @@ class DubbingPipeline:
         preserve_bgm: bool = True,
         clean_subtitles: bool = True,
         remove_watermark: bool = False,
-        bgm_volume: float = 1.05,
+        bgm_volume: Optional[float] = None,
         enable_metadata: bool = True,
         style: str = "viral",
         fit_short: bool = False,
         max_duration: float = 58.0,
         max_videos: Optional[int] = None,
-        sort_by: str = "popularity"
+        sort_by: str = "popularity",
+        max_pages: Optional[int] = None,
+        anti_accent: bool = False,
+        loop: bool = False,
+        mirror: bool = False,
+        smart_crop: bool = False,
+        movie: bool = False,
+        ratio: str = "reel",
+        watermark: Optional[str] = None,
+        disable_bgm: bool = False,
+        allow_tts_fallback: bool = True,
+        move_to_drive: bool = False,
+        delete_input: bool = False,
+        thumbnail: bool = False,
+        capture_movie_details: bool = False,
     ) -> Dict[str, Any]:
         """
         Download all videos from a Douyin user profile / channel URL into input/<channel_name>
@@ -1295,13 +2364,16 @@ class DubbingPipeline:
         print(f" Profile URL : {profile_url}")
         print(f" Max Videos  : {max_videos or 'All'}")
         print(f" Sort By     : {sort_by}")
+        if max_pages:
+            print(f" Max Pages   : {max_pages}")
         print("=" * 65)
 
         channel_folder = self.downloader.download_channel(
             channel_url=profile_url,
             output_dir=self.input_dir,
             max_videos=max_videos,
-            sort_by=sort_by
+            sort_by=sort_by,
+            max_pages=max_pages
         )
 
         return self.run_folder(
@@ -1319,19 +2391,178 @@ class DubbingPipeline:
             enable_metadata=enable_metadata,
             style=style,
             fit_short=fit_short,
-            max_duration=max_duration
+            max_duration=max_duration,
+            anti_accent=anti_accent,
+            loop=loop,
+            mirror=mirror,
+            smart_crop=smart_crop,
+            movie=movie,
+            ratio=ratio,
+            watermark=watermark,
+            disable_bgm=disable_bgm,
+            allow_tts_fallback=allow_tts_fallback,
+            move_to_drive=move_to_drive,
+            delete_input=(delete_input or move_to_drive),
+            capture_movie_details=capture_movie_details,
         )
 
     run_channel = run_profile
+
+    def run_urls(
+        self,
+        urls: List[str],
+        batch_name: Optional[str] = None,
+        target_lang: str = "Hindi",
+        voice: Optional[str] = None,
+        base_speed: float = 1.0,
+        batch_size: int = 35,
+        force: bool = False,
+        dub_mode: str = "block_aligned",
+        preserve_bgm: bool = True,
+        clean_subtitles: bool = True,
+        remove_watermark: bool = False,
+        bgm_volume: Optional[float] = None,
+        enable_metadata: bool = True,
+        style: str = "viral",
+        fit_short: bool = False,
+        max_duration: float = 58.0,
+        anti_accent: bool = False,
+        loop: bool = False,
+        mirror: bool = False,
+        smart_crop: bool = False,
+        movie: bool = False,
+        ratio: str = "reel",
+        watermark: Optional[str] = None,
+        disable_bgm: bool = False,
+        allow_tts_fallback: bool = True,
+        move_to_drive: bool = False,
+        delete_input: bool = False,
+        thumbnail: bool = False,
+        capture_movie_details: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Download a list of Douyin/TikTok URLs into a single batch input folder
+        input/<batch_name>/ and process them together as one batch into
+        output/<batch_name>/ with master metadata.json and Google Drive upload.
+        """
+        clean_urls = _extract_batch_urls("\n".join(str(u) for u in (urls or [])))
+        if not clean_urls:
+            raise ValueError("No valid Douyin/TikTok URLs provided to run_urls().")
+
+        safe_batch_name = _sanitize_batch_name(batch_name or "")
+        batch_input_dir = self.input_dir / safe_batch_name
+        batch_input_dir.mkdir(parents=True, exist_ok=True)
+
+        print("\n" + "=" * 65)
+        print(" [Dubbing Studio] BATCH URLS DOWNLOAD & PIPELINE")
+        print(f" Batch Name  : {safe_batch_name}")
+        print(f" Total URLs  : {len(clean_urls)}")
+        print(f" Input Dir   : {batch_input_dir}")
+        print("=" * 65)
+
+        downloaded_paths: List[Path] = []
+        failed_urls: List[Dict[str, str]] = []
+        for idx, video_url in enumerate(clean_urls, start=1):
+            print(f"\n[Batch URL {idx}/{len(clean_urls)}] Downloading: {video_url}")
+            try:
+                dl_path = self.downloader.download_video(video_url, output_dir=batch_input_dir)
+                downloaded_paths.append(Path(dl_path))
+                self._record_registry_download(
+                    source_url=video_url,
+                    local_path=dl_path,
+                    batch=safe_batch_name,
+                )
+            except Exception as e:
+                print(f"  [Batch URL Warning] Failed to download {video_url}: {e}")
+                failed_urls.append({"url": video_url, "error": str(e)})
+                if self.registry:
+                    try:
+                        self.registry.record_failure(
+                            str(e)[:500],
+                            source_url=video_url,
+                        )
+                    except Exception as registry_err:
+                        print(f"  [Registry] Warning: failure record failed ({registry_err})")
+
+        print("\n" + "-" * 65)
+        print(f" [Batch Download Summary] Downloaded: {len(downloaded_paths)}/{len(clean_urls)}")
+        if failed_urls:
+            print(f" [Batch Download Summary] Failed ({len(failed_urls)}):")
+            for fail in failed_urls:
+                print(f"   - {fail['url']} -> {fail['error']}")
+        print("-" * 65)
+
+        video_exts = {".mp4", ".mov", ".mkv", ".webm", ".avi"}
+        available_videos = [
+            f for f in batch_input_dir.iterdir()
+            if f.is_file() and f.suffix.lower() in video_exts
+        ]
+        if not available_videos:
+            raise RuntimeError(f"All {len(clean_urls)} batch URL downloads failed; no videos in {batch_input_dir}.")
+
+        return self.run_folder(
+            folder_path=batch_input_dir,
+            target_lang=target_lang,
+            voice=voice,
+            base_speed=base_speed,
+            batch_size=batch_size,
+            force=force,
+            dub_mode=dub_mode,
+            preserve_bgm=preserve_bgm,
+            clean_subtitles=clean_subtitles,
+            remove_watermark=remove_watermark,
+            bgm_volume=bgm_volume,
+            enable_metadata=enable_metadata,
+            style=style,
+            fit_short=fit_short,
+            max_duration=max_duration,
+            anti_accent=anti_accent,
+            loop=loop,
+            mirror=mirror,
+            smart_crop=smart_crop,
+            movie=movie,
+            ratio=ratio,
+            watermark=watermark,
+            disable_bgm=disable_bgm,
+            allow_tts_fallback=allow_tts_fallback,
+            move_to_drive=move_to_drive,
+            delete_input=(delete_input or move_to_drive),
+            capture_movie_details=capture_movie_details,
+        )
 
 
 def main():
     parser = argparse.ArgumentParser(description="Douyin / TikTok Automated Dubbing Studio Pipeline")
     parser.add_argument("--url", type=str, default="", help="Douyin/TikTok video URL, path to local MP4, or folder")
-    parser.add_argument("--profile", "--channel", "--profile-url", "--channel-url", type=str, default="", help="Douyin user profile or channel URL to auto-download and process all videos")
-    parser.add_argument("--max-videos", type=int, default=None, help="Maximum number of videos to download from profile (default: None for all available)")
-    parser.add_argument("--sort-by", type=str, default="popularity", choices=["popularity", "popular", "likes", "date", "latest"], help="Sort profile videos by popularity or date (default: popularity)")
+    parser.add_argument(
+        "--profile", "--douyin-profile", "--channel", "--douyin-channel",
+        "--profile-url", "--channel-url", "--user", "--user-url",
+        type=str, default="",
+        help="Douyin user profile or channel URL to auto-download and process all videos through the pipeline"
+    )
+    parser.add_argument(
+        "--max-videos", type=int, default=None,
+        help="Maximum number of videos to download from profile (default: None for all available)"
+    )
+    parser.add_argument(
+        "--sort-by", type=str, default="popularity",
+        choices=["popularity", "popular", "likes", "date", "latest"],
+        help="Sort profile videos by popularity or date (default: popularity)"
+    )
+    parser.add_argument(
+        "--max-pages", "--pages", type=int, default=None,
+        help="Maximum pagination pages to fetch when downloading profile (default: None for all)"
+    )
     parser.add_argument("--folder", "--input-dir", type=str, default="", help="Directory containing videos or subfolders of videos to batch process")
+    parser.add_argument(
+        "--batch-urls", "--urls", "--prompt-urls",
+        action="store_true", default=False,
+        help="Interactive batch mode: prompt for multiple Douyin/TikTok URLs once launched, process them together in one batch folder, and upload to Google Drive"
+    )
+    parser.add_argument(
+        "--batch-name", type=str, default="",
+        help="Optional batch folder name for --batch-urls (prompts or auto-generates batch_YYYYMMDD_HHMMSS if omitted)"
+    )
     parser.add_argument("--reorganize", action="store_true", help="Reorganize and de-clutter existing output files into dedicated subfolders")
     parser.add_argument("--lang", type=str, default="Hindi", help="Target language (default: Hindi in native Devanagari for TTS, mapped to Roman Hinglish captions)")
     parser.add_argument("--voice", type=str, default="", help="Voice narrator (Google: Ludo (default) / Enzo / Charon | ElevenLabs: brian (default) / adam | Sarvam: shubh)")
@@ -1344,18 +2575,41 @@ def main():
     parser.add_argument("--elevenlabs", action="store_true", help="Shortcut: Use ElevenLabs v4 TTS engine")
     parser.add_argument("--speed", type=float, default=1.0, help="Speech speed multiplier (default: 1.0 for Sarvam, 1.28 for Kokoro)")
     parser.add_argument("--output", type=str, default="", help="Output directory (default: ./output)")
-    parser.add_argument("--model", type=str, default="gemini-3.8-flash", help="Gemini model name for translation waterfall (default: gemini-3.8-flash)")
+    parser.add_argument("--model", type=str, default="gemini-3.5-flash-lite", help="Gemini model name for translation waterfall (default: gemini-3.5-flash-lite)")
     parser.add_argument("--batch-size", type=int, default=35, help="Batch size for subtitle chunks")
     parser.add_argument("--no-bgm", action="store_true", help="Disable BGM/SFX preservation (clean voiceover only)")
     parser.add_argument("--no-clean", action="store_true", help="Disable automatic subtitle & watermark inpainting")
     parser.add_argument("--include-watermark", action="store_true", help="Also inpaint corner watermark (takes 2x longer, default: off)")
     parser.add_argument("--force", "--reloop", action="store_true", dest="force", help="Force re-transcription, re-translation, and re-separation")
     parser.add_argument("--metadata", action="store_true", default=True, help="Generate viral social media metadata via Gemini (default: True)")
-    parser.add_argument("--bgm-volume", type=float, default=1.05, help="Background music volume multiplier")
+    parser.add_argument("--bgm-volume", type=float, default=None, help="Background music volume multiplier (default: 1.05, or 1.35 in --movie mode)")
     parser.add_argument("--no-metadata", action="store_true", default=False, help="Disable social metadata generation")
-    parser.add_argument("--short", "-s", "--fit-short", action="store_true", help="Fast-forward video to fit strictly under 1 minute (<= 58s) before sending through pipeline")
+    parser.add_argument("--short", "-s", "--fit-short", action="store_true", help="Condense any video (e.g. 1-2+ mins) into a punchy 1-minute video (<= 58s) via block-by-block Gemini script condensation and Block Aligner")
     parser.add_argument("--max-duration", type=float, default=58.0, help="Target max duration in seconds when --short is enabled (default: 58.0s for YouTube Shorts / Reels)")
+    parser.add_argument("--anti-accent", "--deaccent", "--break-english-pairs", action="store_true", help="Anti-accent mode: keep multi-syllable/heavy words in English script, but convert lower-syllable consecutive English words to Devanagari to prevent neural TTS Western accent switching")
+    parser.add_argument("--loop", "--infinite-loop", action="store_true", default=False, help="Enable Method 1 Infinite Loop: bridge final block smoothly into block 1 as a single continuous sentence")
+    parser.add_argument("--mirror", "--hflip", "--anti-copyright", action="store_true", default=False, help="Anti-copyright mode: horizontally mirror video (hflip) and apply subtle color grade (contrast/saturation) to change visual hash while keeping subtitles readable left-to-right")
+    parser.add_argument("--smart-crop", "--crop-expand", "--interior-short", action="store_true", default=False, help="Smart Crop Mode: crops off bottom Chinese subtitles (bottom 15%%) while maintaining 9:16 portrait ratio, translates opening center-top Chinese hook title into English, and disables burned-in bottom subtitles")
+    parser.add_argument("--movie", "--movie-explanation", action="store_true", default=False, help="Movie Mode: fast OCR top/bottom edge-caption crop, auto-Reels blurred canvas for non-vertical video, picks BGM from 'assets/background_audio/movie explanation/' (1.35x), preserves original video duration without compaction, and word-synced bold display captions")
+    parser.add_argument("--ratio", "--aspect-ratio", type=str, default="reel", help="Output video aspect ratio: 'reel' (default 9:16 portrait) or 'square' (1:1 center-cropped 1080x1080 with condensed bold-italic word captions)")
+    parser.add_argument("--watermark", "--channel-watermark", type=str, default="", help="Channel text watermark rendered at bottom center using SoftLight blend with subtle dark stroke and drop shadow (e.g. --watermark 'Wholesome Wendy')")
+    parser.add_argument("--move-to-drive", "--delete-local", "--offload-drive", action="store_true", default=False, help="Transfer each finished video to Google Drive and immediately delete local video files to save disk space")
+    parser.add_argument("--thumbnail", "-thumb", "--thumb", action="store_true", default=False, help="Generate thumbnail (auto-detects vertical 9:16 for <3min videos or horizontal 16:9 for >=3min videos, pure image, no text)")
+    parser.add_argument("--reset-elevenlabs-keys", action="store_true", default=False, help="Clear the local persisted blocklist of exhausted ElevenLabs keys (without modifying .env)")
+    parser.add_argument("--registry-db", type=str, default="", help="Custom SQLite video registry path (default: output/video_registry.db)")
+    parser.add_argument("--no-registry", action="store_true", default=False, help="Disable the SQLite video registry for this run")
+    parser.add_argument("--capture-movie-details", action="store_true", default=False, help="Identify and store movie name/year/genre/synopsis in the registry (automatic for --batch-urls and --movie)")
+    parser.add_argument("--debug", action="store_true", help="Debug mode: print detailed OCR/audio/BGM telemetry and preserve all intermediate files")
     args = parser.parse_args()
+
+    if args.reset_elevenlabs_keys:
+        cleared = reset_exhausted_elevenlabs_keys()
+        print(f"[Key Pool] Cleared {cleared} exhausted ElevenLabs key record(s) from local pool cache.")
+
+    # When --short / -s is enabled, default to Sarvam AI (shubh) unless user explicitly specified another engine
+    if args.short and not any(flag in sys.argv for flag in ("--tts", "--tts-engine", "--elevenlabs")):
+        args.tts = "sarvam"
+        args.voice = "shubh"
 
     if args.elevenlabs:
         args.tts = "elevenlabs"
@@ -1368,30 +2622,45 @@ def main():
         elif args.tts in ("sarvam", "bulbul"):
             args.voice = "shubh"
 
+    batch_name_input = ""
+    batch_urls: List[str] = []
+    if args.batch_urls:
+        batch_name_input, batch_urls = _prompt_batch_inputs(default_batch_name=args.batch_name)
+        if not batch_urls:
+            parser.error("No valid Douyin/TikTok URLs were provided in --batch-urls prompt.")
+
     out_folder = Path(args.output) if args.output else Path.cwd() / "output"
     in_folder = Path(args.input_dir) if getattr(args, "input_dir", None) else None
-    pipeline = DubbingPipeline(input_dir=in_folder, output_dir=out_folder, gemini_model=args.model, tts_engine=args.tts)
+    pipeline = DubbingPipeline(
+        input_dir=in_folder,
+        output_dir=out_folder,
+        gemini_model=args.model,
+        tts_engine=args.tts,
+        debug=args.debug,
+        registry_db=args.registry_db or None,
+        enable_registry=not args.no_registry,
+    )
 
     if args.reorganize:
         pipeline.reorganize_existing_output()
         print("[Pipeline] Reorganization complete!")
-        if not (args.profile or args.url or args.folder):
+        if not (args.batch_urls or args.profile or args.url or args.folder):
             return
 
     input_profile = args.profile.strip()
     input_target = input_profile or args.folder or args.url
-    if not input_target:
-        parser.error("Please provide either --profile (Douyin profile URL), --url (video URL/file), or --folder")
+    if not input_target and not args.batch_urls:
+        parser.error("Please provide --batch-urls, --profile (Douyin profile URL), --url (video URL/file), or --folder")
 
     target_path = Path(input_target)
     is_url = bool(args.url or input_profile) or input_target.lower().startswith("http://") or input_target.lower().startswith("https://")
     
-    # Check if input is a Douyin profile URL
-    is_profile_input = bool(input_profile) or (
-        is_url and (
+    # Check if input is a Douyin profile URL (ensure modal_id single video URLs are treated as single video)
+    has_modal_or_vid = "modal_id=" in input_target.lower() or "vid=" in input_target.lower()
+    is_profile_input = (bool(input_profile) and not has_modal_or_vid) or (
+        is_url and not has_modal_or_vid and not bool(args.url) and (
             "/user/" in input_target.lower()
             or "sec_user_id" in input_target.lower()
-            or "from_tab_name" in input_target.lower()
         )
     )
 
@@ -1415,62 +2684,58 @@ def main():
     is_short = bool(args.short)
     max_dur = float(args.max_duration)
 
-    if is_profile_input:
+    shared_kwargs = dict(
+        target_lang=args.lang,
+        voice=args.voice if args.voice else None,
+        base_speed=args.speed,
+        batch_size=args.batch_size,
+        force=args.force,
+        dub_mode=selected_dub_mode,
+        preserve_bgm=not args.no_bgm,
+        clean_subtitles=not args.no_clean,
+        remove_watermark=args.include_watermark,
+        bgm_volume=args.bgm_volume,
+        enable_metadata=should_gen_meta,
+        style=selected_style,
+        fit_short=is_short,
+        max_duration=max_dur,
+        anti_accent=args.anti_accent,
+        loop=args.loop,
+        mirror=args.mirror,
+        smart_crop=args.smart_crop,
+        movie=args.movie,
+        ratio=normalize_aspect_ratio(args.ratio),
+        watermark=args.watermark.strip() or None,
+        move_to_drive=args.move_to_drive,
+        delete_input=args.move_to_drive,
+        thumbnail=args.thumbnail,
+        capture_movie_details=bool(args.capture_movie_details or args.batch_urls),
+    )
+
+    if args.batch_urls:
+        pipeline.run_urls(
+            urls=batch_urls,
+            batch_name=batch_name_input,
+            **shared_kwargs,
+        )
+    elif is_profile_input:
         profile_url = input_profile or input_target
         pipeline.run_profile(
             profile_url=profile_url,
-            target_lang=args.lang,
-            voice=args.voice if args.voice else None,
-            base_speed=args.speed,
-            batch_size=args.batch_size,
-            force=args.force,
-            dub_mode=selected_dub_mode,
-            preserve_bgm=not args.no_bgm,
-            clean_subtitles=not args.no_clean,
-            remove_watermark=args.include_watermark,
-            bgm_volume=args.bgm_volume,
-            enable_metadata=should_gen_meta,
-            style=selected_style,
-            fit_short=is_short,
-            max_duration=max_dur,
             max_videos=args.max_videos,
-            sort_by=args.sort_by
+            sort_by=args.sort_by,
+            max_pages=args.max_pages,
+            **shared_kwargs,
         )
     elif is_folder_input:
         pipeline.run_folder(
             folder_path=target_path,
-            target_lang=args.lang,
-            voice=args.voice if args.voice else None,
-            base_speed=args.speed,
-            batch_size=args.batch_size,
-            force=args.force,
-            dub_mode=selected_dub_mode,
-            preserve_bgm=not args.no_bgm,
-            clean_subtitles=not args.no_clean,
-            remove_watermark=args.include_watermark,
-            bgm_volume=args.bgm_volume,
-            enable_metadata=should_gen_meta,
-            style=selected_style,
-            fit_short=is_short,
-            max_duration=max_dur
+            **shared_kwargs,
         )
     else:
         pipeline.run(
             url_or_file=input_target,
-            target_lang=args.lang,
-            voice=args.voice if args.voice else None,
-            base_speed=args.speed,
-            batch_size=args.batch_size,
-            force=args.force,
-            dub_mode=selected_dub_mode,
-            preserve_bgm=not args.no_bgm,
-            clean_subtitles=not args.no_clean,
-            remove_watermark=args.include_watermark,
-            bgm_volume=args.bgm_volume,
-            enable_metadata=should_gen_meta,
-            style=selected_style,
-            fit_short=is_short,
-            max_duration=max_dur
+            **shared_kwargs,
         )
 
 

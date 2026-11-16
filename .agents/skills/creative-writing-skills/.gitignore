@@ -1,0 +1,15 @@
+.DS_Store
+/zips/
+/test/
+/.mars/
+/.meridian/
+
+/.agents/agents/
+/.claude/
+/.codex/
+/.agents/skills/
+mars.lock
+/.cursor/agents/
+/.cursor/skills/
+/.opencode/agents/
+/.opencode/skills/

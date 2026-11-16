@@ -65,7 +65,9 @@ def adjust_audio_speed(audio: np.ndarray, sample_rate: int, speed: float) -> np.
 def main():
     srt_path = Path("output/latest_hindi.srt")
     vid_path = Path("output/latest_original.mp4")
-    ref_speaker = Path("reference_speaker.wav")
+    ref_speaker = Path("assets/voices/reference_speaker.wav")
+    if not ref_speaker.exists():
+        ref_speaker = Path("reference_speaker.wav")
     out_vid = Path("output/line_by_line_xtts_dubbed.mp4")
 
     if not srt_path.exists():

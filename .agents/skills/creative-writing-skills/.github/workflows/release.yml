@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      # Pinned: `mars check` compares the committed `plugin/` tree against the
+      # Mars that built it, so CI must run the version authors build with.
+      - name: Install Mars
+        run: |
+          uv tool install "mars-agents==0.26.2"
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Validate package
+        run: mars check
+
+      - name: Check committed plugin output is up to date
+        run: |
+          mars build plugin
+          changed=$(git diff --name-only -- plugin .claude-plugin .cursor-plugin package.json)
+          untracked=$(git ls-files --others --exclude-standard -- plugin .claude-plugin .cursor-plugin package.json)
+          if [ -n "$changed$untracked" ]; then
+            echo "::error::Committed plugin output is stale. Run 'mars build plugin' and commit the result."
+            printf '%s\n' "$changed" "$untracked"
+            exit 1
+          fi
+
+      - name: Validate Claude plugin (manifest + components)
+        run: claude plugins validate plugin/claude
+
+      - name: Validate Claude marketplace catalog
+        run: claude plugins validate .claude-plugin/marketplace.json
+
+      - name: Validate YAML frontmatter
+        run: |
+          error=0
+          for f in agents/*.md skills/*/SKILL.md; do
+            if [ -f "$f" ]; then
+              if ! head -1 "$f" | grep -q '^---'; then
+                echo "::error file=$f::Missing YAML frontmatter"
+                error=1
+              fi
+            fi
+          done
+          exit $error
+
+      - name: Verify tag matches mars.toml version
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          toml_version=$(grep '^version' mars.toml | head -1 | sed 's/.*= *"\(.*\)"/\1/')
+          if [ "$tag" != "v$toml_version" ]; then
+            echo "::error::Tag $tag does not match mars.toml version $toml_version"
+            exit 1
+          fi
+
+  release:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Claude.ai skill packages
+        run: python3 scripts/create_skill_zips.py
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: zips/*.skill

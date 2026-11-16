@@ -121,17 +121,19 @@ class ElevenLabsTTS:
         api_key: Optional[str] = None,
         default_voice: str = "roger",
         language_code: str = "hi",
-        model: str = "eleven_v4"
+        model: str = "eleven_v4_turbo"
     ):
         active_pool = get_active_elevenlabs_keys()
         if api_key:
-            self.api_keys = [api_key.strip()]
+            self._explicit_single_key = api_key.strip()
+            self.api_keys = [self._explicit_single_key]
         else:
+            self._explicit_single_key = None
             self.api_keys = active_pool
 
         if not self.api_keys:
             raise ValueError(
-                "No active ELEVENLABS_API_KEY or ELEVENLABS_API_KEYS found in environment."
+                "No active ELEVENLABS_API_KEY or ELEVENLABS_API_KEYS available in local pool."
             )
 
         self.key_idx = 0
@@ -139,8 +141,9 @@ class ElevenLabsTTS:
         self.default_voice = default_voice
         self.language_code = language_code
         self.model = model
-        # Waterfall: v4 first as requested, then multilingual v2, then turbo v2.5
+        # Waterfall: eleven_v4_turbo first as default, then eleven_v4, then multilingual v2, then turbo v2.5
         self.fallback_models = [
+            "eleven_v4_turbo",
             "eleven_v4",
             "eleven_multilingual_v2",
             "eleven_turbo_v2_5",
@@ -149,17 +152,22 @@ class ElevenLabsTTS:
             self.fallback_models.insert(0, self.model)
 
     def get_client(self):
-        """Thread-safe retrieval of current ElevenLabs client with active key."""
+        """Thread-safe retrieval of current ElevenLabs client with an active key from the local pool."""
         from elevenlabs.client import ElevenLabs
 
         with self._key_lock:
-            active_pool = set(get_active_elevenlabs_keys())
-            self.api_keys = [k for k in self.api_keys if k in active_pool]
+            if not self._explicit_single_key:
+                # Filter against live active pool (never re-adds exhausted keys)
+                active_pool = get_active_elevenlabs_keys()
+                active_set = set(active_pool)
+                self.api_keys = [k for k in self.api_keys if k in active_set]
+                if not self.api_keys:
+                    self.api_keys = active_pool
             if not self.api_keys:
-                self.api_keys = list(active_pool)
-            if not self.api_keys:
-                raise RuntimeError("All ElevenLabs API keys in the runtime pool have been exhausted.")
-            key = self.api_keys[self.key_idx % len(self.api_keys)]
+                raise RuntimeError("All ElevenLabs API keys in the local runtime pool have been exhausted.")
+            idx = self.key_idx % len(self.api_keys)
+            key = self.api_keys[idx]
+            self.key_idx = (idx + 1) % len(self.api_keys)
         return ElevenLabs(api_key=key), key
 
     def rotate_key(self, dead_key: Optional[str] = None, reason: str = ""):
@@ -198,6 +206,7 @@ class ElevenLabsTTS:
             except Exception:
                 pass
 
+        current_lang = (language_code or self.language_code or "hi").strip().lower()
         clean_text = text.strip()
         # ElevenLabs v4 natively interprets bracketed Audio Tags like [laughs], [gasps], [whispers] as expressive performance cues.
         # Ensure trailing dashes/hyphens/dangling punctuation are sanitized to prevent hallucinated noises
@@ -206,15 +215,13 @@ class ElevenLabsTTS:
         clean_text = " ".join(clean_text.split())
         # Ensure a clean closing punctuation so the vocoder knows the sentence has finished
         if clean_text and not clean_text.endswith((".", "!", "?", "।")):
-            clean_text += "।"
+            clean_text += "।" if current_lang.startswith("hi") else "."
         if not clean_text:
             return np.zeros(2400, dtype=np.float32), 24000
 
         voice_id = resolve_voice_id(voice or self.default_voice)
-        current_lang = language_code or self.language_code
-        # In ElevenLabs, ONLY eleven_v4 / eleven_v3 support bracketed Audio Tags. Older models (multilingual v2) read them aloud!
-        # Enforce eleven_v4 exclusively so tags are enacted as vocal performance and never spoken aloud.
-        models_to_try = ["eleven_v4", "eleven_v3"]
+        # Keep consistent model (eleven_v4) across all blocks so voice tone, pronunciation, and style never abruptly shift
+        target_model = self.model or "eleven_v4_turbo"
 
         from elevenlabs import VoiceSettings
         voice_settings = VoiceSettings(
@@ -224,11 +231,12 @@ class ElevenLabsTTS:
             use_speaker_boost=True
         )
 
-        for attempt in range(max_retries):
+        total_attempts = max(max_retries, len(self.api_keys) + 2)
+        for attempt in range(total_attempts):
             if not self.api_keys and not get_active_elevenlabs_keys():
                 raise RuntimeError("All ElevenLabs API keys in the runtime pool have been exhausted.")
 
-            current_model = models_to_try[attempt % len(models_to_try)]
+            current_model = target_model
             client, active_key = self.get_client()
 
             try:
@@ -265,17 +273,23 @@ class ElevenLabsTTS:
 
             except Exception as e:
                 err_str = str(e)
+                status_code = getattr(e, "status_code", None)
+                err_body = getattr(e, "body", None)
+                detail_msg = f"HTTP {status_code}: {err_body}" if (status_code or err_body) else err_str
                 # If library voice is restricted on free tier, gracefully fall back to official Hindi narrator Brian
                 if ("library voice" in err_str.lower() or "library_voice" in err_str.lower() or "paid_plan_required" in err_str.lower()) and voice_id != ELEVENLABS_VOICES["brian"]:
                     print(f"      [ElevenLabs Notice] Voice '{voice or self.default_voice}' is a Community Library voice requiring paid credits. Auto-falling back to official Hindi narrator 'Brian'...")
                     voice_id = ELEVENLABS_VOICES["brian"]
                     continue
-                if is_elevenlabs_dead_error(err_str):
-                    print(f"      [ElevenLabs Key Exhausted] ({mask_key(active_key)}): {err_str[:80]}")
-                    self.rotate_key(dead_key=active_key, reason=err_str[:80])
-                    time.sleep(0.5)
+                if is_elevenlabs_dead_error(err_str, status_code=status_code, body=err_body):
+                    self.rotate_key(dead_key=active_key, reason=str(detail_msg)[:120])
+                    if not self._explicit_single_key and not get_active_elevenlabs_keys():
+                        raise RuntimeError("All ElevenLabs API keys in the local runtime pool have been exhausted.")
+                    if self._explicit_single_key:
+                        raise RuntimeError(f"Explicit ElevenLabs key exhausted: {str(detail_msg)[:120]}")
+                    time.sleep(0.25)
                 else:
-                    print(f"      [ElevenLabs Notice on {current_model}] {err_str[:80]}. Retrying next key...")
+                    print(f"      [ElevenLabs Notice on {current_model}] {str(detail_msg)[:100]}. Retrying next key...")
                     self.rotate_key()
                     time.sleep(1.0)
 

@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "skills": {
+    "camoufox-cli": {
+      "source": "Bin-Huang/camoufox-cli",
+      "sourceType": "github",
+      "skillPath": "skills/camoufox-cli/SKILL.md",
+      "computedHash": "afa3e024c38fdf68735250e5ce64db907490b8f4cc54834713230e0f1da03ac5"
+    }
+  }
+}

@@ -87,7 +87,7 @@ def generate_sarvam_tts(
     **kwargs
 ) -> str:
     """
-    Generates ultra-realistic Hindi/Hinglish TTS using Sarvam AI's Bulbul v3 model.
+    Generates ultra-realistic Hindi/Hinglish TTS using Sarvam AI models (bulbul:v3 or bulbul:v4-flash).
     Optimized for YouTube Shorts & Movie Recaps.
     """
     key = api_key
@@ -100,13 +100,18 @@ def generate_sarvam_tts(
             "Please check SARVAM_API_KEY or SARVAM_API_KEYS in your .env file."
         )
 
+    # Auto-detect v4-flash if speaker has v4 naming pattern or if model is explicitly passed
+    req_model = kwargs.get("model", model)
+    if ("_hi_" in speaker or "_en_" in speaker or "_enhi_" in speaker) and req_model == "bulbul:v3":
+        req_model = "bulbul:v4-flash"
+
     client = SarvamAI(api_subscription_key=key)
     lang = kwargs.get("target_language_code", language_code)
 
     response = client.text_to_speech.convert(
         text=text,
         language_code=lang,
-        model=model,
+        model=req_model,
         speaker=speaker,
         pace=float(pace),
         speech_sample_rate=speech_sample_rate

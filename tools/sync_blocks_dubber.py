@@ -108,7 +108,7 @@ def synthesize_sarvam_block(text: str, speaker: str = "shubh", cache_path: Path 
         output_path=str(cache_path),
         speaker=speaker,
         pace=1.18,
-        model="bulbul:v3"
+        model="bulbul:v4-flash"
     )
     audio, sr = sf.read(str(cache_path))
     return audio, sr

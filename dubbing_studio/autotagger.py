@@ -44,8 +44,6 @@ def autotag_subtitle_block(
     # Final Block / Triumphant Climax with CTA
     elif index == total_blocks:
         style = "triumphant, enthusiastic, warm YouTube creator ending with subscribe call to action"
-        if "लो" in tagged_text and not re.search(r"<laugh>|<sigh>", tagged_text):
-            tagged_text = re.sub(r"(लो[,!]?)", r"\1 <laugh>", tagged_text, count=1)
 
     # Middle / Action & Instruction
     else:

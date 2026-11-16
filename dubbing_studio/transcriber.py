@@ -147,8 +147,8 @@ class Transcriber:
                 has_sent = any(p in w.word for p in sentence_punct)
                 has_clause = any(p in w.word for p in clause_punct)
 
-                # Split on full sentence end (>= 2.5s) or long clause (>= 5.5s) or hard limit (>= 7.5s)
-                if (has_sent and dur >= 2.5) or (has_clause and dur >= 5.5) or dur >= 7.5:
+                # Granular clause-level blocks: split on sentence end (>= 1.6s), natural clause (>= 2.8s), or hard limit (>= 3.8s)
+                if (has_sent and dur >= 1.6) or (has_clause and dur >= 2.8) or dur >= 3.8:
                     text_chunk = "".join(current_words).strip()
                     if text_chunk:
                         split_blocks.append((current_start, w.end, text_chunk))

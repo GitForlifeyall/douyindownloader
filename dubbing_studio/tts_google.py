@@ -12,6 +12,7 @@ Features:
 """
 
 import os
+import re
 import sys
 import time
 import io
@@ -52,6 +53,20 @@ def parse_gemini_audio_response(raw_bytes: bytes, mime_type: str = "audio/L16", 
     except Exception:
         audio_array = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32) / 32768.0
         return audio_array, sample_rate
+
+
+def extract_audio_tags_and_clean_text(text: str) -> Tuple[str, str]:
+    """Strip inline `[tag]` emotion cues so non-ElevenLabs TTS never speaks them aloud.
+
+    Returns `(clean_spoken_text, style_string)` where `style_string` is a comma-joined
+    list of unique extracted emotion/delivery cues.
+    """
+    raw = str(text or "").strip()
+    tags = [m.strip() for m in re.findall(r"\[([a-zA-Z][a-zA-Z\s_-]{0,30})\]", raw) if m.strip()]
+    clean = re.sub(r"\[[a-zA-Z][a-zA-Z\s_-]{0,30}\]", "", raw)
+    clean = " ".join(clean.split()).strip()
+    unique_tags = ", ".join(dict.fromkeys(tags))
+    return clean, unique_tags
 
 
 def trim_audio_silence(audio: np.ndarray, threshold: float = 0.005, pad_samples: int = 480) -> np.ndarray:
@@ -175,8 +190,26 @@ class GoogleGeminiTTS:
             speech_config={"voice_config": {"prebuilt_voice_config": {"voice_name": speaker_name}}}
         )
 
-        prompt_str = str(contents).strip()
-        c_input = prompt_str
+        if isinstance(contents, types.Part):
+            raw_text = contents.text or ""
+            existing_style = getattr(getattr(contents, "speech_metadata", None), "style", None) or ""
+        else:
+            raw_text = str(contents).strip()
+            existing_style = ""
+
+        spoken_text, tag_style = extract_audio_tags_and_clean_text(raw_text)
+        if not spoken_text:
+            spoken_text = raw_text
+
+        style_parts = [s.strip() for s in (tag_style, existing_style) if s and s.strip()]
+        combined_style = ", ".join(dict.fromkeys(style_parts)) or (self.style or "")
+        if combined_style:
+            c_input: Union[str, types.Part] = types.Part(
+                text=spoken_text,
+                speech_metadata=types.SpeechMetadata(style=combined_style)
+            )
+        else:
+            c_input = spoken_text
 
         models_to_try = [self.model] + [m for m in self.fallback_models if m != self.model]
 

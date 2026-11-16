@@ -34,7 +34,7 @@ app = FastAPI(
 class DubRequest(BaseModel):
     url: str = Field(..., description="Douyin or TikTok video URL")
     target_lang: str = Field("Hindi", description="Target dubbing language (e.g. Hindi, English, Spanish)")
-    voice: Optional[str] = Field("shubh", description="Voice ID (Sarvam: shubh, bulbul:v3; Gemini: Orus)")
+    voice: Optional[str] = Field("shubh", description="Voice ID (Sarvam: shubh, bulbul:v4-flash; Gemini: Orus)")
     speed: float = Field(1.0, description="Base voice playback speed multiplier")
     preserve_bgm: bool = Field(True, description="Separate and preserve original BGM/SFX using Demucs")
     clean_subtitles: bool = Field(True, description="Inpaint and erase Chinese subtitles using STTN GPU")
