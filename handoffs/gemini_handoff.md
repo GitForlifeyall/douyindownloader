@@ -7,6 +7,42 @@ This document logs all architectural decisions, code changes, pipeline updates, 
 
 ## Session History & Major Changes
 
+### [2026-11-18] Facebook Two-Factor Authentication (TOTP App) & Recovery Codes Engine
+1. **Instruction & Flow**:
+   - The user instructed to configure Facebook Two-Factor Authentication (TOTP authenticator app) and backup/recovery codes before Facebook Page creation.
+   - UI navigation:
+     - Avatar dropdown -> `Settings & privacy` -> `Settings`.
+     - Left navigation: `Meta Account` (Accounts Center).
+     - Accounts Center: `Login and security` -> `Two-factor authentication`.
+     - Direct URL fallback: `https://accountscenter.facebook.com/password_and_security/two_factor/?locale=en_US`.
+     - Account row selection.
+     - Password challenge handling: "it may ask for your password, if it does then write pass else carry on".
+     - Method selection ("Help protect your account"): select "Authentication app (Recommended)" -> click "Continue".
+     - Secret key extraction & crash-safe pre-persistence -> enter 6-digit TOTP code -> verify & confirm 2FA on.
+     - Backup / recovery codes extraction: navigate to "Two-factor authentication" -> "Manage authentication" -> "Recovery codes" / "Backup codes" -> copy/extract codes.
+     - Crucial ordering: Strictly run before Facebook Page creation.
+2. **Resolution & Architecture**:
+   - **Dedicated Engine** ([`tools/setup_facebook_2fa.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/setup_facebook_2fa.mjs)):
+     - Full state machine for Facebook 2FA setup and recovery codes extraction.
+     - Multi-tier navigation: organic in-app navigation through avatar dropdown, settings, and accounts center, with fallback to direct accounts center URL.
+     - Password challenge detection and auto-fill via `handlePasswordChallengeIfPresent`.
+     - RFC 6238 standard TOTP generation with 30-second epoch window synchronization.
+     - Email security code polling via Microsoft Graph / Outlook REST API (`pollOutlookFor2FAEmailOtp`).
+     - Dedicated recovery codes extraction pass (`extractFacebookBackupCodesPass`).
+     - Multi-destination vault persistence:
+       1) [`output/facebook_registered_accounts.json`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/output/facebook_registered_accounts.json)
+       2) [`output/facebook_backup_codes.json`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/output/facebook_backup_codes.json)
+       3) `<profileDir>/backup_codes.txt`
+       4) `<profileDir>/account_info.json`
+     - Supports both embedded execution and standalone CLI: `node tools/setup_facebook_2fa.mjs --email <email> --password <pass>`.
+   - **Integration in Sign-Up Pipeline** ([`tools/facebook_signup_camoufox.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/facebook_signup_camoufox.mjs)):
+     - Added `setupFacebook2FA` execution immediately after post-registration modals/suspension check and strictly before `createFacebookPage()`.
+     - Added `--skip-2fa` flag for flexibility.
+     - Preserved and merged `two_factor` state inside `saveRegisteredAccount`.
+3. **Verification**:
+   - Unit tests executed in `tests/test_artifacts/test_fb_2fa_unit.mjs` verifying Base32 decoding, RFC 6238 TOTP calculation, and backup code extraction across multiple text patterns (100% PASS).
+
+
 ### [2026-11-18] Facebook Post-OTP Checkpoint/* Suspension Check Hardening
 1. **Instruction & Optimization**:
    - The user instructed to specifically check for `checkpoint/*` right after submitting the OTP in Facebook.

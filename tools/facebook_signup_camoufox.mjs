@@ -39,6 +39,7 @@ import {
   humanScroll,
   getMousePosition,
 } from "./kinematic_mouse.mjs";
+import { setupFacebook2FA } from "./setup_facebook_2fa.mjs";
 
 const CAMOUFOX_PATH = "file:///C:/Users/rudra/AppData/Roaming/npm/node_modules/camoufox-cli/node_modules/camoufox-js/dist/index.js";
 const { Camoufox } = await import(CAMOUFOX_PATH);
@@ -123,6 +124,7 @@ const newEmailFlag = hasFlag("--new-email") || hasFlag("--new");
 const headless = hasFlag("--headless");
 const skipWarmup = hasFlag("--skip-warmup");
 const skipPage = hasFlag("--skip-page");
+const skip2fa = hasFlag("--skip-2fa");
 const keepProfile = hasFlag("--resume") || hasFlag("--keep");
 
 const REGISTERED_ACCOUNTS_FILE = path.resolve("output", "facebook_registered_accounts.json");
@@ -673,7 +675,7 @@ async function preSignupOrganicWarmup(page) {
     try {
       console.log(`[Camoufox Warmup] Quick cache visit: ${site.name} (${site.url})...`);
       await safeGoto(page, site.url, { waitUntil: "domcontentloaded", timeout: 15000 });
-      await page.bringToFront().catch(() => {});
+      await page.bringToFront().catch(() => { });
       await page.mouse.wheel(0, 200);
       await page.waitForTimeout(1000 + Math.random() * 500);
       console.log(`[Camoufox Warmup] Browsed ${site.name}.`);
@@ -705,7 +707,7 @@ async function handlePostSignupModals(page, maxWaitMs = 15000) {
     const saveInfoBtn = page.locator("button:has-text('Save'), [role='button']:has-text('Save'), button:has-text('OK'), [role='button']:has-text('OK'), button:has-text('सेव करें')").first();
     if ((await saveInfoBtn.count()) > 0 && (await saveInfoBtn.isVisible().catch(() => false))) {
       console.log("[Facebook Onboarding] Found 'Save info' modal. Clicking 'OK'/'Save'...");
-      await humanClick(page, saveInfoBtn).catch(() => {});
+      await humanClick(page, saveInfoBtn).catch(() => { });
       handled = true;
       await page.waitForTimeout(1500);
     }
@@ -714,7 +716,7 @@ async function handlePostSignupModals(page, maxWaitMs = 15000) {
     const notNowBtn = page.locator("button:has-text('Not Now'), [role='button']:has-text('Not Now'), button:has-text('Skip'), [role='button']:has-text('Skip'), [aria-label='Close'], [aria-label='बंद करें']").first();
     if ((await notNowBtn.count()) > 0 && (await notNowBtn.isVisible().catch(() => false))) {
       console.log("[Facebook Onboarding] Found 'Not Now'/'Skip' prompt. Dismissing...");
-      await humanClick(page, notNowBtn).catch(() => {});
+      await humanClick(page, notNowBtn).catch(() => { });
       handled = true;
       await page.waitForTimeout(1500);
     }
@@ -743,7 +745,7 @@ async function warmUpFeed(page, durationSeconds = 30) {
     const readPause = 1800 + Math.floor(Math.random() * 2500);
     await page.waitForTimeout(readPause);
 
-    await humanWander(page, 1).catch(() => {});
+    await humanWander(page, 1).catch(() => { });
   }
   console.log("[Facebook Warmup] Completed natural human feed browsing warmup.");
 }
@@ -864,12 +866,12 @@ async function pollOutlookForFacebookOtp(cId, rToken, startTimeMs, maxWaitSecond
 
                 // Facebook codes are 5 digits (\b\d{5}\b) or FB-\d{5}, or 6 digits in some regions
                 const matchCode = subject.match(/\b(\d{5})\b/) ||
-                                  preview.match(/(?:code|is|कोड|है|FB-)\s*[:\s]*(\d{5,8})\b/i) ||
-                                  preview.match(/\b(\d{5})\b/) ||
-                                  fullContent.match(/(?:code|is|कोड|है|FB-)\s*[:\s]*(\d{5,8})\b/i) ||
-                                  subject.match(/\b(\d{6})\b/) ||
-                                  preview.match(/\b(\d{6})\b/) ||
-                                  fullContent.match(/\b(\d{5,6})\b/);
+                  preview.match(/(?:code|is|कोड|है|FB-)\s*[:\s]*(\d{5,8})\b/i) ||
+                  preview.match(/\b(\d{5})\b/) ||
+                  fullContent.match(/(?:code|is|कोड|है|FB-)\s*[:\s]*(\d{5,8})\b/i) ||
+                  subject.match(/\b(\d{6})\b/) ||
+                  preview.match(/\b(\d{6})\b/) ||
+                  fullContent.match(/\b(\d{5,6})\b/);
 
                 if (matchCode) {
                   const code = matchCode[1];
@@ -1048,7 +1050,7 @@ function markFacebookAccountSuspended(emailOrProfile, url, profileDir = null) {
       const infoPath = path.join(profileDir, "account_info.json");
       let info = {};
       if (fs.existsSync(infoPath)) {
-        try { info = JSON.parse(fs.readFileSync(infoPath, "utf-8")); } catch (e) {}
+        try { info = JSON.parse(fs.readFileSync(infoPath, "utf-8")); } catch (e) { }
       }
       info.status = "SUSPENDED";
       info.is_suspended = true;
@@ -1088,7 +1090,7 @@ async function isFacebookSuspendedScreen(page) {
     ) {
       return { isSuspended: true, url: curUrl, reason: "suspension_text_match" };
     }
-  } catch (e) {}
+  } catch (e) { }
   return { isSuspended: false, url: null, reason: null };
 }
 
@@ -1102,6 +1104,10 @@ function saveRegisteredAccount(record) {
       } catch (e) {
         existing = [];
       }
+    }
+    const prev = existing.find((item) => (item && item.email ? item.email.toLowerCase() : "") === record.email.toLowerCase());
+    if (prev && prev.two_factor && !record.two_factor) {
+      record.two_factor = prev.two_factor;
     }
     existing = existing.filter((item) => (item && item.email ? item.email.toLowerCase() : "") !== record.email.toLowerCase());
     existing.push(record);
@@ -1133,7 +1139,7 @@ async function selectCustomCombobox(page, name, locator, regex) {
   }
 
   if ((await opt.count()) > 0) {
-    await opt.scrollIntoViewIfNeeded().catch(() => {});
+    await opt.scrollIntoViewIfNeeded().catch(() => { });
     await humanClick(page, opt).catch(() => opt.click());
     await page.waitForTimeout(300 + Math.random() * 150);
     const txt = (await box.innerText().catch(() => "")).trim();
@@ -1148,7 +1154,7 @@ async function selectCustomCombobox(page, name, locator, regex) {
     const item = allOpts.nth(j);
     const text = (await item.innerText().catch(() => "")).trim();
     if (regex.test(text)) {
-      await item.scrollIntoViewIfNeeded().catch(() => {});
+      await item.scrollIntoViewIfNeeded().catch(() => { });
       await humanClick(page, item).catch(() => item.click());
       await page.waitForTimeout(300 + Math.random() * 150);
       const txt = (await box.innerText().catch(() => "")).trim();
@@ -1170,9 +1176,9 @@ async function fillBirthdayAndGender(page, dobObj, targetGender) {
   const yearSelect = page.locator("select[name='birthday_year']").first();
   if ((await daySelect.count()) > 0 && (await daySelect.isVisible().catch(() => false))) {
     console.log("[Facebook] Native HTML <select> dropdowns detected.");
-    await daySelect.selectOption(String(dobObj.day)).catch(() => {});
-    await monthSelect.selectOption(String(dobObj.monthIndex || dobObj.month)).catch(() => {});
-    await yearSelect.selectOption(String(dobObj.year)).catch(() => {});
+    await daySelect.selectOption(String(dobObj.day)).catch(() => { });
+    await monthSelect.selectOption(String(dobObj.monthIndex || dobObj.month)).catch(() => { });
+    await yearSelect.selectOption(String(dobObj.year)).catch(() => { });
   } else {
     // Check 2: Modern Facebook React Comboboxes (targeted semantically by aria-label & text)
     // 1. Day
@@ -1872,7 +1878,7 @@ async function run() {
         domain: ".facebook.com",
         path: "/",
       },
-    ]).catch(() => {});
+    ]).catch(() => { });
   }
   const page = (browser.pages && browser.pages().length > 0) ? browser.pages()[0] : await browser.newPage();
   await page.bringToFront().catch(() => { });
@@ -2017,10 +2023,10 @@ async function run() {
 
       if ((await createAccBtn.count()) > 0 && (await createAccBtn.isVisible().catch(() => false))) {
         console.log("[Facebook] Natural interaction: Hovering & clicking 'Create new account' button...");
-        await humanHover(page, createAccBtn).catch(() => {});
+        await humanHover(page, createAccBtn).catch(() => { });
         await page.waitForTimeout(400 + Math.random() * 300);
         await Promise.all([
-          page.waitForURL((url) => url.pathname.includes("/reg") || url.search.includes("entry_point=login"), { timeout: 15000 }).catch(() => {}),
+          page.waitForURL((url) => url.pathname.includes("/reg") || url.search.includes("entry_point=login"), { timeout: 15000 }).catch(() => { }),
           humanClick(page, createAccBtn).catch(() => createAccBtn.click()),
         ]);
         console.log("[Facebook] Waiting for registration page/modal to settle...");
@@ -2040,7 +2046,7 @@ async function run() {
 
       // Wait for registration input fields to be visible
       console.log("[Facebook] Waiting for registration input fields to become visible...");
-      await page.waitForSelector("input[type='text']:visible, input[name='firstname']:visible", { timeout: 20000 }).catch(() => {});
+      await page.waitForSelector("input[type='text']:visible, input[name='firstname']:visible", { timeout: 20000 }).catch(() => { });
 
       // 1. Fill First Name & Surname
       console.log(`[Facebook] Typing Name: ${firstName} ${lastName}...`);
@@ -2088,7 +2094,7 @@ async function run() {
       console.log("[Facebook] Submitting registration form ('Submit')...");
       const submitBtn = page.locator("button:has-text('Submit'), [role='button']:has-text('Submit'), button:has-text('Sign Up'), [role='button']:has-text('Sign Up'), button:has-text('सबमिट'), [role='button']:has-text('सबमिट'), button:has-text('साइन अप करें')").first();
       if ((await submitBtn.count()) > 0 && (await submitBtn.isVisible().catch(() => false))) {
-        await humanHover(page, submitBtn).catch(() => {});
+        await humanHover(page, submitBtn).catch(() => { });
         await page.waitForTimeout(350);
         await humanClick(page, submitBtn).catch(() => submitBtn.click());
       } else {
@@ -2120,8 +2126,8 @@ async function run() {
           riskEvent("account_suspended", { url: postSubmitSusp.url, reason: postSubmitSusp.reason, at: new Date().toISOString() });
           riskMark("account_suspended");
         }
-        await page.screenshot({ path: path.join(profileDir, "suspension_screen.png"), fullPage: true }).catch(() => {});
-        await page.screenshot({ path: "tests/test_artifacts/fb_latest_live.png", fullPage: true }).catch(() => {});
+        await page.screenshot({ path: path.join(profileDir, "suspension_screen.png"), fullPage: true }).catch(() => { });
+        await page.screenshot({ path: "tests/test_artifacts/fb_latest_live.png", fullPage: true }).catch(() => { });
         markFacebookAccountSuspended(email, postSubmitSusp.url, profileDir);
         saveRegisteredAccount({
           email,
@@ -2160,8 +2166,8 @@ async function run() {
       console.error("=".repeat(65));
       console.error(`[Facebook] ⚠️ ACCOUNT SUSPENDED: Facebook is on suspension checkpoint ${otpRes.url}`);
       console.error("=".repeat(65));
-      await page.screenshot({ path: path.join(profileDir, "suspension_screen.png"), fullPage: true }).catch(() => {});
-      await page.screenshot({ path: "tests/test_artifacts/fb_latest_live.png", fullPage: true }).catch(() => {});
+      await page.screenshot({ path: path.join(profileDir, "suspension_screen.png"), fullPage: true }).catch(() => { });
+      await page.screenshot({ path: "tests/test_artifacts/fb_latest_live.png", fullPage: true }).catch(() => { });
       markFacebookAccountSuspended(email, otpRes.url, profileDir);
       saveRegisteredAccount({
         email,
@@ -2207,8 +2213,8 @@ async function run() {
       console.error("=".repeat(65));
       console.error(`[Facebook] ⚠️ ACCOUNT SUSPENDED: Facebook redirected to ${suspUrl}`);
       console.error("=".repeat(65));
-      await page.screenshot({ path: path.join(profileDir, "suspension_screen.png"), fullPage: true }).catch(() => {});
-      await page.screenshot({ path: "tests/test_artifacts/fb_latest_live.png", fullPage: true }).catch(() => {});
+      await page.screenshot({ path: path.join(profileDir, "suspension_screen.png"), fullPage: true }).catch(() => { });
+      await page.screenshot({ path: "tests/test_artifacts/fb_latest_live.png", fullPage: true }).catch(() => { });
       markFacebookAccountSuspended(email, suspUrl, profileDir);
       saveRegisteredAccount({
         email,
@@ -2238,6 +2244,20 @@ async function run() {
       console.log("[Facebook] Automation strictly ABORTED due to account suspension.");
       console.log("[Facebook] >>> SESSION IS LIVE ON YOUR SCREEN <<<");
       return;
+    }
+
+    // 6.8 Two-Factor Authentication & Backup Codes Setup (Strictly BEFORE Page Creation)
+    let twoFaResult = null;
+    if (!skip2fa) {
+      console.log("[Facebook] Proceeding to Two-Factor Authentication & Backup Codes Setup (before Page creation)...");
+      try {
+        twoFaResult = await setupFacebook2FA(page, email, password, profileDir, clientId, refreshToken);
+        console.log(`[Facebook 2FA] Completed with status: ${twoFaResult?.status || "UNKNOWN"}`);
+      } catch (twoFaErr) {
+        console.warn(`[Facebook 2FA Note]: ${twoFaErr.message}`);
+      }
+    } else {
+      console.log("[Facebook] Skipping Facebook 2FA setup per --skip-2fa flag.");
     }
 
     // 7. Automated Facebook Page Creation Flow (Optional, guarded by !skipPage)
@@ -2279,6 +2299,7 @@ async function run() {
       full_hotmail_thread: otpRes && otpRes.thread ? otpRes.thread : null,
       account_created_at: new Date().toISOString(),
       status: otpRes.success ? "CONFIRMED" : "PENDING_OTP",
+      two_factor: twoFaResult || undefined,
     });
 
     // 9. Post-Creation Natural Human Feed Browsing Warmup (30s)
