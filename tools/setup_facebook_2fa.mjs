@@ -743,11 +743,18 @@ export async function setupFacebook2FA(page, emailTarget, password = null, expli
 
       let emailCode = null;
       if (rToken) {
-        emailCode = await pollOutlookFor2FAEmailOtp(cId, rToken, Date.now() - 10 * 60 * 1000, 60);
-      }
-      if (!emailCode) {
-        console.log("[Facebook 2FA] Waiting 20s for manual security code if prompted...");
-        await page.waitForTimeout(20000);
+        console.log("[Facebook 2FA] Polling Outlook for security code (Round 1/2, timeout: 35s)...");
+        emailCode = await pollOutlookFor2FAEmailOtp(cId, rToken, Date.now() - 10 * 60 * 1000, 35);
+        if (!emailCode) {
+          console.log("[Facebook 2FA] ⚠️ Code not received in 35s. Triggering 'Send a new code'...");
+          const resend2FaBtn = container.locator("button:has-text('Send a new code'), [role='button']:has-text('Send a new code'), a:has-text('Send a new code'), button:has-text('Resend'), a:has-text('Resend'), [role='button']:has-text('Resend')").first();
+          if ((await resend2FaBtn.count()) > 0 && (await resend2FaBtn.isVisible().catch(() => false))) {
+            await humanClick(page, resend2FaBtn).catch(() => resend2FaBtn.click());
+            await page.waitForTimeout(2000);
+          }
+          console.log("[Facebook 2FA] Polling Outlook for security code (Round 2/2, timeout: 35s)...");
+          emailCode = await pollOutlookFor2FAEmailOtp(cId, rToken, Date.now() - 10 * 60 * 1000, 35);
+        }
       }
 
       if (emailCode) {

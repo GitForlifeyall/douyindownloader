@@ -1237,6 +1237,103 @@ async function promptTerminalOtp(email, timeoutSec = 180) {
 }
 
 // ----------------------------------------------------
+// Resend Facebook Confirmation OTP
+// ----------------------------------------------------
+async function resendFacebookOtp(page) {
+  console.log("[Facebook] Attempting to trigger 'Resend OTP' / 'Send email again' on page...");
+  try {
+    const directResendSelectors = [
+      "a:has-text('Send email again')",
+      "button:has-text('Send email again')",
+      "[role='button']:has-text('Send email again')",
+      "a:has-text('Send code again')",
+      "button:has-text('Send code again')",
+      "[role='button']:has-text('Send code again')",
+      "a:has-text('Resend code')",
+      "button:has-text('Resend code')",
+      "[role='button']:has-text('Resend code')",
+      "a:has-text('Resend email')",
+      "button:has-text('Resend email')",
+      "[role='button']:has-text('Resend email')",
+      "a:has-text('Resend confirmation code')",
+      "button:has-text('Resend confirmation code')",
+      "a:has-text('कोड दोबारा भेजें')",
+      "button:has-text('कोड दोबारा भेजें')",
+      "a:has-text('ईमेल दोबारा भेजें')",
+      "button:has-text('ईमेल दोबारा भेजें')"
+    ];
+
+    for (const sel of directResendSelectors) {
+      const el = page.locator(sel).first();
+      if ((await el.count()) > 0 && (await el.isVisible().catch(() => false))) {
+        console.log(`[Facebook] Clicking direct resend element: ${sel}...`);
+        await humanClick(page, el).catch(() => el.click());
+        await page.waitForTimeout(3000);
+        return true;
+      }
+    }
+
+    const popupTriggers = [
+      "a:has-text(\"Didn't get a code?\")",
+      "button:has-text(\"Didn't get a code?\")",
+      "[role='button']:has-text(\"Didn't get a code?\")",
+      "a:has-text(\"Didn't get the code?\")",
+      "button:has-text(\"Didn't get the code?\")",
+      "[role='button']:has-text(\"Didn't get the code?\")",
+      "a:has-text(\"I didn't get the code\")",
+      "button:has-text(\"I didn't get the code\")",
+      "[role='button']:has-text(\"I didn't get the code\")",
+      "a:has-text('क्या आपको कोड नहीं मिला?')",
+      "button:has-text('क्या आपको कोड नहीं मिला?')"
+    ];
+
+    for (const sel of popupTriggers) {
+      const el = page.locator(sel).first();
+      if ((await el.count()) > 0 && (await el.isVisible().catch(() => false))) {
+        console.log(`[Facebook] Clicking popup trigger: ${sel}...`);
+        await humanClick(page, el).catch(() => el.click());
+        await page.waitForTimeout(2000);
+
+        for (const subSel of directResendSelectors) {
+          const subEl = page.locator(subSel).first();
+          if ((await subEl.count()) > 0 && (await subEl.isVisible().catch(() => false))) {
+            console.log(`[Facebook] Clicking confirmation resend in popup: ${subSel}...`);
+            await humanClick(page, subEl).catch(() => subEl.click());
+            await page.waitForTimeout(3000);
+            return true;
+          }
+        }
+        return true;
+      }
+    }
+
+    const found = await page.evaluate(() => {
+      const linksAndButtons = Array.from(document.querySelectorAll("a, button, [role='button'], span"));
+      for (const el of linksAndButtons) {
+        const text = (el.innerText || "").trim().toLowerCase();
+        if (text.includes("send email again") || text.includes("send code again") || text.includes("resend") || text.includes("दोबारा भेजें")) {
+          el.click();
+          return true;
+        }
+      }
+      return false;
+    });
+
+    if (found) {
+      console.log("[Facebook] Triggered resend via DOM search fallback.");
+      await page.waitForTimeout(3000);
+      return true;
+    }
+
+    console.warn("[Facebook] Could not locate 'Resend OTP' element on page.");
+    return false;
+  } catch (err) {
+    console.warn(`[Facebook Resend Note]: ${err.message}`);
+    return false;
+  }
+}
+
+// ----------------------------------------------------
 // OTP Challenge Handler
 // ----------------------------------------------------
 async function handleOtpChallenge(page, targetEmail, cId, rToken, sessionStartTimeMs) {
@@ -1288,9 +1385,35 @@ async function handleOtpChallenge(page, targetEmail, cId, rToken, sessionStartTi
   console.log("[Facebook] >>> ENTER CONFIRMATION CODE SCREEN DETECTED! <<<");
   console.log("=".repeat(60));
 
+  const isOutlookAccount = Boolean(cId && rToken) || /@(outlook|hotmail|live|msn)\./i.test(targetEmail);
   let otpData = null;
+
   if (cId && rToken) {
-    otpData = await pollOutlookForFacebookOtp(cId, rToken, sessionStartTimeMs, 150);
+    const maxRounds = 4;
+    const roundTimeoutSec = 35; // User instruction: "if otp doesnt come under 35 secs then resend otp"
+
+    for (let round = 1; round <= maxRounds; round++) {
+      const suspCheck = await isFacebookSuspendedScreen(page);
+      if (suspCheck.isSuspended) {
+        console.error("=".repeat(65));
+        console.error(`[Facebook] ⚠️ ACCOUNT SUSPENDED: Facebook redirected to ${suspCheck.url}`);
+        console.error("=".repeat(65));
+        return { success: false, otp: null, thread: null, suspended: true, url: suspCheck.url };
+      }
+
+      console.log(`[Facebook] Polling Outlook for OTP (Round ${round}/${maxRounds}, timeout: ${roundTimeoutSec}s)...`);
+      otpData = await pollOutlookForFacebookOtp(cId, rToken, sessionStartTimeMs, roundTimeoutSec);
+      if (otpData) {
+        console.log(`[Facebook] Successfully received OTP on round ${round}!`);
+        break;
+      }
+
+      if (round < maxRounds) {
+        console.log(`[Facebook] ⚠️ OTP not received within ${roundTimeoutSec}s. Triggering 'Resend OTP'...`);
+        await resendFacebookOtp(page);
+        await page.waitForTimeout(2000);
+      }
+    }
   } else if (targetEmail.endsWith("@lnovic.com")) {
     const rawOtp = await pollTempMailForOtp(targetEmail, 150);
     if (rawOtp) {
@@ -1303,9 +1426,14 @@ async function handleOtpChallenge(page, targetEmail, cId, rToken, sessionStartTi
   let otp = otpData ? (typeof otpData === "object" ? otpData.otp : otpData) : null;
   const thread = otpData && otpData.thread ? otpData.thread : null;
 
+  // Strict user instruction: "donot ask me for it for outlook"
   if (!otp) {
-    console.log(`[Facebook] Automated inbox polling returned no code for ${targetEmail}. Prompting for terminal entry...`);
-    otp = await promptTerminalOtp(targetEmail, 180);
+    if (isOutlookAccount) {
+      console.warn(`[Facebook] ⚠️ Outlook OTP not received after automated retries and resends. Per user instruction, strictly skipping terminal prompt for Outlook.`);
+    } else {
+      console.log(`[Facebook] Automated inbox polling returned no code for ${targetEmail}. Prompting for terminal entry...`);
+      otp = await promptTerminalOtp(targetEmail, 180);
+    }
   }
 
   if (otp) {

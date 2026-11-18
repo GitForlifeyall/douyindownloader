@@ -7,6 +7,23 @@ This document logs all architectural decisions, code changes, pipeline updates, 
 
 ## Session History & Major Changes
 
+### [2026-11-18] Facebook OTP 35-Second Resend Trigger & Outlook Terminal Prompt Elimination
+1. **Instruction**:
+   - "if otp doesnt come under 35 secs then resend otp. donot ask me for it for outlook"
+2. **Resolution & Implementation**:
+   - **Dedicated Resend Engine (`resendFacebookOtp`)** in [`tools/facebook_signup_camoufox.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/facebook_signup_camoufox.mjs):
+     - Scans for and clicks `Send email again`, `Send code again`, `Resend code`, `Resend confirmation code`, `Didn't get a code?`, `I didn't get the code`, or multilingual variants (`कोड दोबारा भेजें`, `ईमेल दोबारा भेजें`).
+     - Handles nested popup dialogs when "Didn't get a code?" opens an options modal.
+   - **35-Second Polling & Resend Loop**:
+     - `handleOtpChallenge` now runs in rounds of 35 seconds each (up to 4 attempts).
+     - If code is not found within 35 seconds, it automatically clicks "Resend OTP" / "Send email again", waits 2 seconds, and immediately polls for the fresh incoming email.
+   - **Elimination of Outlook Terminal Prompts**:
+     - `isOutlookAccount` detection via Microsoft OAuth tokens (`cId`/`rToken`) or domain matching (`@outlook`, `@hotmail`, `@live`, `@msn`).
+     - Strictly skips terminal OTP prompts for Outlook accounts, eliminating manual interruptions.
+   - **2FA Email Security Code Parity** in [`tools/setup_facebook_2fa.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/setup_facebook_2fa.mjs):
+     - Aligned 2FA email security challenges to 35-second polling with automated `Send a new code` trigger.
+
+
 ### [2026-11-18] Syntax Fix: facebook_signup_camoufox.mjs & metricool_camoufox.mjs
 1. **Root Cause**:
    - In [`tools/facebook_signup_camoufox.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/facebook_signup_camoufox.mjs), an unclosed suspension `if` check from a prior edit created a duplicate nested block that mismatched braces before `finally {`, throwing `SyntaxError: Unexpected token 'finally'`.
