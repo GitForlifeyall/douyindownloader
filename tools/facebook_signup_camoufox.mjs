@@ -641,7 +641,7 @@ async function safeGoto(page, url, options = { waitUntil: "domcontentloaded", ti
         console.warn(`[Navigation] Landed on browser network error (${curUrl}). Clicking 'Try Again'...`);
         const tryAgainBtn = page.locator("#errorTryAgain, button:has-text('Try Again')").first();
         if ((await tryAgainBtn.count()) > 0) {
-          await tryAgainBtn.click().catch(() => {});
+          await tryAgainBtn.click().catch(() => { });
           await page.waitForTimeout(4000);
         }
       }
@@ -652,10 +652,10 @@ async function safeGoto(page, url, options = { waitUntil: "domcontentloaded", ti
         const tryAgainBtn = page.locator("#errorTryAgain, button:has-text('Try Again')").first();
         if ((await tryAgainBtn.count()) > 0 && (await tryAgainBtn.isVisible().catch(() => false))) {
           console.log("[Navigation] Clicking 'Try Again' button on network error screen...");
-          await tryAgainBtn.click().catch(() => {});
+          await tryAgainBtn.click().catch(() => { });
           await page.waitForTimeout(4000);
         }
-      } catch (e) {}
+      } catch (e) { }
       if (RISK && RISK.proxy && RISK.proxy.strict_sticky
         && /502|bad gateway|proxy_connection_refused|proxy authentication|tunnel/i.test(err.message || "")) {
         throw new Error("[Risk] Bound proxy session failed (502/proxy refused); aborting instead of rotating to a new IP.");
@@ -1148,17 +1148,19 @@ async function selectCustomCombobox(page, name, locator, regex) {
     return false;
   }
 
+  const optionSelector = "[role='option'], [role='menuitemradio'], [role='menuitem'], [role='listbox'] [tabindex], [role='listbox'] div:visible, div[role='dialog'] [role='option'], div[role='dialog'] [role='menuitemradio']";
+
   // Check if dropdown popup is already open from user interaction
-  let opt = page.locator("[role='option']").filter({ hasText: regex }).first();
+  let opt = page.locator(optionSelector).filter({ hasText: regex }).first();
   if ((await opt.count()) === 0 || !(await opt.isVisible().catch(() => false))) {
-    await humanClick(page, box).catch(() => box.click());
+    await humanClick(page, box).catch(() => box.click({ force: true }));
     await page.waitForTimeout(350 + Math.random() * 150);
-    opt = page.locator("[role='option']").filter({ hasText: regex }).first();
+    opt = page.locator(optionSelector).filter({ hasText: regex }).first();
   }
 
   if ((await opt.count()) > 0) {
     await opt.scrollIntoViewIfNeeded().catch(() => { });
-    await humanClick(page, opt).catch(() => opt.click());
+    await humanClick(page, opt).catch(() => opt.click({ force: true }));
     await page.waitForTimeout(300 + Math.random() * 150);
     const txt = (await box.innerText().catch(() => "")).trim();
     console.log(`[Facebook] Set ${name} to: '${txt.replace(/\n/g, " - ")}'`);
@@ -1166,14 +1168,14 @@ async function selectCustomCombobox(page, name, locator, regex) {
   }
 
   // Fallback: iterate all options if exact filter was hidden
-  const allOpts = page.locator("[role='option']");
+  const allOpts = page.locator(optionSelector);
   const optCount = await allOpts.count();
   for (let j = 0; j < optCount; j++) {
     const item = allOpts.nth(j);
     const text = (await item.innerText().catch(() => "")).trim();
-    if (regex.test(text)) {
+    if (regex.test(text) || (text && regex.test(text.split("\n")[0].trim()))) {
       await item.scrollIntoViewIfNeeded().catch(() => { });
-      await humanClick(page, item).catch(() => item.click());
+      await humanClick(page, item).catch(() => item.click({ force: true }));
       await page.waitForTimeout(300 + Math.random() * 150);
       const txt = (await box.innerText().catch(() => "")).trim();
       console.log(`[Facebook] Set ${name} via scroll to: '${txt.replace(/\n/g, " - ")}'`);
@@ -1182,6 +1184,162 @@ async function selectCustomCombobox(page, name, locator, regex) {
   }
 
   console.warn(`[Facebook] Warning: Option matching ${regex} for ${name} not found.`);
+  return false;
+}
+
+// ----------------------------------------------------
+// Specialized Facebook Gender Selector
+// Handles Combobox / Dropdowns ("Select your gender"),
+// native HTML <select>, and radio buttons with post-validation.
+// ----------------------------------------------------
+async function selectFacebookGender(page, targetGender) {
+  console.log(`[Facebook] Selecting Gender: ${targetGender}...`);
+  const isFemale = targetGender.toLowerCase() === "female";
+
+  const isMatch = (txt) => {
+    const s = (txt || "").trim();
+    if (!s) return false;
+    if (isFemale) {
+      return /\bfemale\b|महिला|સ્ત્રી/i.test(s);
+    } else {
+      return (/\bmale\b/i.test(s) && !/\bfemale\b/i.test(s)) || /पुरुष|પુરુષ/i.test(s);
+    }
+  };
+
+  // Check 1: Native HTML <select name='sex'>
+  const genderSelect = page.locator("select[name='sex'], select[aria-label*='gender' i], select[aria-label*='लिंग' i]").first();
+  if ((await genderSelect.count()) > 0 && (await genderSelect.isVisible().catch(() => false))) {
+    const val = isFemale ? "1" : "2";
+    console.log(`[Facebook] Selecting gender via native <select> (value='${val}')...`);
+    await genderSelect.selectOption(val).catch(() => { });
+    return true;
+  }
+
+  // Check 2: Modern React Combobox / Dropdown ("Select your gender")
+  const genderBoxSelectors = [
+    "[role='combobox']:has-text('Select your gender')",
+    "[role='button']:has-text('Select your gender')",
+    "[aria-haspopup='listbox']:has-text('Select your gender')",
+    "div:has-text('Select your gender'):visible",
+    "span:has-text('Select your gender'):visible",
+    "[role='combobox'][aria-label*='gender' i]",
+    "[role='combobox']:has-text('gender')",
+    "[aria-haspopup='listbox'][aria-label*='gender' i]",
+    "div[aria-label*='gender' i]",
+    "[role='combobox'][aria-label*='लिंग' i]",
+    "[role='combobox'][aria-label*='જાતિ' i]"
+  ];
+
+  let genderBox = null;
+  for (const sel of genderBoxSelectors) {
+    const loc = page.locator(sel).first();
+    if ((await loc.count()) > 0 && (await loc.isVisible().catch(() => false))) {
+      genderBox = loc;
+      break;
+    }
+  }
+
+  if (genderBox) {
+    console.log("[Facebook] Found Gender dropdown box. Clicking to expand options...");
+    await humanClick(page, genderBox).catch(() => genderBox.click({ force: true }));
+    await page.waitForTimeout(400 + Math.random() * 200);
+
+    const optionCandidateSelectors = [
+      "[role='option']",
+      "[role='menuitemradio']",
+      "[role='menuitem']",
+      "[role='listbox'] [tabindex]",
+      "[role='listbox'] div",
+      "div[role='dialog'] [role='option']",
+      "div[data-pagelet] [role='option']"
+    ];
+
+    let optionClicked = false;
+    for (const optSel of optionCandidateSelectors) {
+      const items = page.locator(optSel);
+      const count = await items.count();
+      for (let i = 0; i < count; i++) {
+        const item = items.nth(i);
+        if (await item.isVisible().catch(() => false)) {
+          const itemText = (await item.innerText().catch(() => "")).trim();
+          if (isMatch(itemText)) {
+            console.log(`[Facebook] Clicking matched gender option: '${itemText.replace(/\n/g, " - ")}'`);
+            await item.scrollIntoViewIfNeeded().catch(() => { });
+            await humanClick(page, item).catch(() => item.click({ force: true }));
+            optionClicked = true;
+            break;
+          }
+        }
+      }
+      if (optionClicked) break;
+    }
+
+    // Direct in-page DOM click if playwright locators missed the popover portal
+    if (!optionClicked) {
+      optionClicked = await page.evaluate((female) => {
+        const match = (str) => {
+          const s = (str || "").trim();
+          if (female) return /\bfemale\b|महिला|સ્ત્રી/i.test(s);
+          return (/\bmale\b/i.test(s) && !/\bfemale\b/i.test(s)) || /पुरुष|પુરુષ/i.test(s);
+        };
+        const elements = Array.from(document.querySelectorAll("[role='option'], [role='menuitemradio'], [role='menuitem'], [role='listbox'] div, [role='listbox'] span, div[tabindex='-1'], div[tabindex='0'], span"));
+        for (const el of elements) {
+          const t = el.innerText || el.textContent || "";
+          if (match(t)) {
+            el.click();
+            return true;
+          }
+        }
+        return false;
+      }, isFemale);
+    }
+
+    await page.waitForTimeout(400);
+
+    // Verification: check if the box text changed away from "Select your gender"
+    const currentBoxText = (await genderBox.innerText().catch(() => "")).trim();
+    const isStillUnselected = /select your gender|select/i.test(currentBoxText) || currentBoxText === "";
+
+    if (isStillUnselected) {
+      console.warn(`[Facebook] Gender box still unselected ('${currentBoxText}'). Trying keyboard navigation fallback...`);
+      await genderBox.focus().catch(() => { });
+      await genderBox.click().catch(() => { });
+      await page.waitForTimeout(250);
+      if (isFemale) {
+        await page.keyboard.press("ArrowDown");
+        await page.waitForTimeout(100);
+        await page.keyboard.press("Enter");
+      } else {
+        await page.keyboard.press("ArrowDown");
+        await page.waitForTimeout(100);
+        await page.keyboard.press("ArrowDown");
+        await page.waitForTimeout(100);
+        await page.keyboard.press("Enter");
+      }
+      await page.waitForTimeout(300);
+    } else {
+      console.log(`[Facebook] Successfully selected Gender: '${currentBoxText.replace(/\n/g, " - ")}'`);
+      return true;
+    }
+  }
+
+  // Check 3: Radio buttons (alternate A/B testing form layouts)
+  const radioVal = isFemale ? "1" : "2";
+  const radioBtn = page.locator(`input[type='radio'][value='${radioVal}'], label:has-text('${targetGender}') input[type='radio'], input[type='radio'][aria-label*='${targetGender}' i]`).first();
+  if ((await radioBtn.count()) > 0 && (await radioBtn.isVisible().catch(() => false))) {
+    await humanClick(page, radioBtn).catch(() => radioBtn.click({ force: true }));
+    console.log(`[Facebook] Selected gender radio: ${targetGender}`);
+    return true;
+  }
+
+  // Check 4: Label click fallback for radio buttons
+  const labelBtn = page.locator(`label:has-text('${targetGender}')`).first();
+  if ((await labelBtn.count()) > 0 && (await labelBtn.isVisible().catch(() => false))) {
+    await humanClick(page, labelBtn).catch(() => labelBtn.click({ force: true }));
+    console.log(`[Facebook] Clicked gender label: ${targetGender}`);
+    return true;
+  }
+
   return false;
 }
 
@@ -1215,20 +1373,8 @@ async function fillBirthdayAndGender(page, dobObj, targetGender) {
     await selectCustomCombobox(page, "Year", yearBox, yearRegex);
   }
 
-  // Gender Selection: Handle Combobox OR Radio Buttons
-  const genderBox = page.locator("[role='combobox'][aria-label*='gender' i], [role='combobox']:has-text('gender'), [role='combobox'][aria-label*='लिंग' i], [role='combobox']:has-text('लिंग'), [role='combobox'][aria-label*='જાતિ' i]");
-  if ((await genderBox.count()) > 0 && (await genderBox.first().isVisible().catch(() => false))) {
-    const genderRegex = targetGender === "Female" ? /^(?:female|महिला|સ્ત્રી)$/i : /^(?:male|पुरुष|પુરુષ)$/i;
-    await selectCustomCombobox(page, "Gender", genderBox, genderRegex);
-  } else {
-    // Radio buttons fallback
-    const radioVal = targetGender === "Female" ? "1" : "2";
-    const radioBtn = page.locator(`input[type='radio'][value='${radioVal}'], label:has-text('${targetGender}') input[type='radio'], input[type='radio'][aria-label*='${targetGender}' i]`).first();
-    if ((await radioBtn.count()) > 0 && (await radioBtn.isVisible().catch(() => false))) {
-      await humanClick(page, radioBtn).catch(() => radioBtn.click());
-      console.log(`[Facebook] Selected gender radio: ${targetGender}`);
-    }
-  }
+  // Robust Gender Selection
+  await selectFacebookGender(page, targetGender);
 }
 
 async function promptTerminalOtp(email, timeoutSec = 180) {
@@ -2227,7 +2373,7 @@ async function run() {
           console.warn("[Facebook] Browser is on network error page. Clicking 'Try Again'...");
           const tryAgain = page.locator("#errorTryAgain, button:has-text('Try Again')").first();
           if ((await tryAgain.count()) > 0) {
-            await tryAgain.click().catch(() => {});
+            await tryAgain.click().catch(() => { });
             await page.waitForTimeout(4000);
             continue;
           }
@@ -2333,7 +2479,18 @@ async function run() {
         }
       }
 
-      // 5. Submit with natural hesitation pause
+      // 5. Pre-submit Validation: Ensure Gender is actually selected
+      const genderNeedsFix = await page.evaluate(() => {
+        const bodyTxt = (document.body && document.body.innerText) || "";
+        return bodyTxt.includes("Please choose a gender") || bodyTxt.includes("Select your gender") || bodyTxt.includes("कृपया एक लिंग चुनें");
+      });
+      if (genderNeedsFix) {
+        console.warn("[Facebook] Gender still unselected or validation warning visible before submit. Re-running selectFacebookGender...");
+        await selectFacebookGender(page, randomGender);
+        await page.waitForTimeout(600);
+      }
+
+      // 6. Submit with natural hesitation pause
       await page.waitForTimeout(1000 + Math.random() * 800);
       console.log("[Facebook] Submitting registration form ('Submit')...");
       const submitBtn = page.locator("button:has-text('Submit'), [role='button']:has-text('Submit'), button:has-text('Sign Up'), [role='button']:has-text('Sign Up'), button:has-text('सबमिट'), [role='button']:has-text('सबमिट'), button:has-text('साइन अप करें')").first();

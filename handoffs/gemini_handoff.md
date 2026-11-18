@@ -7,6 +7,33 @@ This document logs all architectural decisions, code changes, pipeline updates, 
 
 ## Session History & Major Changes
 
+### [2026-11-18] Fix Facebook Registration Gender Dropdown Selection & Pre-Submit Validation
+1. **Instruction & Context**:
+   - The user provided screenshot `media_1794990724094_13d7a745.png` showing the red-highlighted gender combobox:
+     - Label: `Gender ?`
+     - Box placeholder: `Select your gender` with a dropdown chevron `v`.
+     - Error: `(!) Please choose a gender. You can change who can see this later.`
+   - The script filled the first name, last name, and date of birth, but submitted without selecting gender, causing Facebook registration validation failure.
+2. **Root Cause**:
+   - **Combobox Locator Rigidity**: The previous selector required `[role='combobox']`, missing custom button/div dropdown elements with placeholder `Select your gender`.
+   - **Strict Anchored Regex & Substring Collision**:
+     - Strict `^female$` and `^male$` regexes failed because React/Comet renders options with internal whitespace, newlines, and subtitles (e.g. `'Female\n'`, `'Male '`).
+     - Substring collision: `Male` matches `Female` in naive substring filters (`female` contains `male`), causing `Male` filters to evaluate `Female` options first and reject them when strict matching failed, closing the popup with no option selected.
+     - Option roles in modern Facebook listboxes vary across `[role='option']`, `[role='menuitemradio']`, `[role='menuitem']`, and `div[role='listbox'] div`.
+3. **Resolution & Hardening**:
+   - In [`tools/facebook_signup_camoufox.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/facebook_signup_camoufox.mjs):
+     - Created specialized `selectFacebookGender(page, targetGender)`:
+       - Multi-candidate selector targeting `"Select your gender"` text, comboboxes, buttons, and ARIA popovers.
+       - Expanded popover option search across `[role='option']`, `[role='menuitemradio']`, `[role='menuitem']`, and `[role='listbox'] div`.
+       - Word-boundary matching with substring collision protection (`/\bmale\b/i` + `!/\bfemale\b/i` for Male, `/\bfemale\b/i` for Female).
+       - Direct in-page DOM click evaluation if portal elements sit outside Playwright's default accessibility tree.
+       - Post-click validation: checks if box text remains `"Select your gender"` or empty.
+       - Keyboard navigation fallback (`ArrowDown` -> `Enter`) for standard ARIA combobox accessibility.
+       - Radio button and label click fallback for legacy / alternate layout A/B tests.
+     - Enhanced `selectCustomCombobox`: broadened option container search and whitespace trimming.
+     - Added Pre-Submit Validation: checks if `"Please choose a gender"` or `"Select your gender"` is visible right before clicking Submit, re-triggering `selectFacebookGender` if needed.
+
+
 ### [2026-11-18] Facebook confirmemail.php Auto-Redirect & 2FA Setup "Done" Dismissal Fix
 1. **Instruction & Context**:
    - The user instructed:
