@@ -1807,6 +1807,13 @@ async function run() {
   // Initialize Risk Tracking
   initRiskLog({ email, proxyArg: effectiveProxy, persona, fingerprint, profileDir, startedAt });
 
+  // Seed Profile Aging: Bookmarks Toolbar, browsing history & visible UI
+  try {
+    const agingScript = path.resolve("tools", "profile_aging.py");
+    execFileSync("python", [agingScript, profileDir], { timeout: 10000 });
+    console.log("[Profile Aging] Seeded Bookmarks Toolbar & realistic browsing history into profile.");
+  } catch (e) { }
+
   console.log("[Camoufox] Launching Camoufox with residential proxy, frozen persona & WebRTC protection...");
   const scr = persona.screen_resolution || { width: 1920, height: 1080 };
   if (fingerprint && fingerprint.headers) {
@@ -1825,6 +1832,10 @@ async function run() {
     firefox_user_prefs: {
       "intl.accept_languages": "en-US, en",
       "javascript.use_us_english_locale": true,
+      "browser.toolbars.bookmarks.visibility": "always",
+      "browser.urlbar.suggest.bookmark": true,
+      "browser.urlbar.suggest.history": true,
+      "browser.urlbar.suggest.topsites": true,
     },
     webgl_config: persona.webgl_config || undefined,
     i_know_what_im_doing: true,

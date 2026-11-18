@@ -1960,6 +1960,13 @@ async function run() {
   // passwords, OTPs, tokens or proxy authentication.
   initRiskLog({ email, username, proxyArg: effectiveProxy, persona, fingerprint, profileDir, startedAt, usernamePattern, nameSource });
 
+  // Seed Profile Aging: Bookmarks Toolbar, browsing history & visible UI
+  try {
+    const agingScript = path.resolve("tools", "profile_aging.py");
+    execFileSync("python", [agingScript, profileDir], { timeout: 10000 });
+    console.log("[Profile Aging] Seeded Bookmarks Toolbar & realistic browsing history into profile.");
+  } catch (e) { }
+
   console.log("[Camoufox] Launching Camoufox with residential proxy, frozen persona & WebRTC protection...");
   const scr = persona.screen_resolution || { width: 1920, height: 1080 };
   if (fingerprint && fingerprint.headers) {
@@ -1978,6 +1985,10 @@ async function run() {
     firefox_user_prefs: {
       "intl.accept_languages": "en-US, en",
       "javascript.use_us_english_locale": true,
+      "browser.toolbars.bookmarks.visibility": "always",
+      "browser.urlbar.suggest.bookmark": true,
+      "browser.urlbar.suggest.history": true,
+      "browser.urlbar.suggest.topsites": true,
     },
     webgl_config: persona.webgl_config || undefined, // explicit real consumer GPU pair
     i_know_what_im_doing: true,  // intentional: we persist the fingerprint ourselves

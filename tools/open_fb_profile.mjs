@@ -14,6 +14,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
 
 const CAMOUFOX_PATH = "file:///C:/Users/rudra/AppData/Roaming/npm/node_modules/camoufox-cli/node_modules/camoufox-js/dist/index.js";
 const { Camoufox } = await import(CAMOUFOX_PATH);
@@ -219,6 +220,12 @@ if (fingerprint && fingerprint.headers) {
   fingerprint.headers["accept-language"] = "en-US,en;q=0.9";
 }
 
+// Seed Profile Aging: Bookmarks Toolbar, browsing history & visible UI
+try {
+  const agingScript = path.resolve("tools", "profile_aging.py");
+  execFileSync("python", [agingScript, profileDir], { timeout: 10000 });
+} catch (e) { }
+
 const browserConfig = {
   user_data_dir: profileDir,
   headless: false,
@@ -233,6 +240,10 @@ const browserConfig = {
   firefox_user_prefs: {
     "intl.accept_languages": "en-US, en",
     "javascript.use_us_english_locale": true,
+    "browser.toolbars.bookmarks.visibility": "always",
+    "browser.urlbar.suggest.bookmark": true,
+    "browser.urlbar.suggest.history": true,
+    "browser.urlbar.suggest.topsites": true,
   },
   geoip: true,
   fingerprint,

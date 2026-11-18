@@ -18,6 +18,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
 import {
   humanGlide,
   humanClick,
@@ -1043,6 +1044,12 @@ const GPU_CONFIGURATIONS = [
   console.log("============================================================");
 
   const scr = persona?.screen_resolution || { width: 1920, height: 1080 };
+  // Seed Profile Aging: Bookmarks Toolbar, browsing history & visible UI
+  try {
+    const agingScript = path.resolve("tools", "profile_aging.py");
+    execFileSync("python", [agingScript, profileDir], { timeout: 10000 });
+  } catch (e) { }
+
   const browserConfig = {
     user_data_dir: profileDir,
     headless: hasFlag("--headless"),
@@ -1056,6 +1063,10 @@ const GPU_CONFIGURATIONS = [
     firefox_user_prefs: {
       "intl.accept_languages": "en-US, en",
       "javascript.use_us_english_locale": true,
+      "browser.toolbars.bookmarks.visibility": "always",
+      "browser.urlbar.suggest.bookmark": true,
+      "browser.urlbar.suggest.history": true,
+      "browser.urlbar.suggest.topsites": true,
     },
     webgl_config: persona?.webgl_config || undefined,
     i_know_what_im_doing: true,

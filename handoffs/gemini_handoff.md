@@ -7,6 +7,27 @@ This document logs all architectural decisions, code changes, pipeline updates, 
 
 ## Session History & Major Changes
 
+### [2026-11-18] Profile Aging Engine: Bookmarks Toolbar, Browsing History & UI Realism Seeding
+1. **Background & Objective**:
+   - Fresh automated browser profiles lack bookmarks, history, and cache, making them visually bare during manual reviews and vulnerable to browser fingerprint aging heuristics.
+   - The user requested making opened Facebook and Instagram browser profiles appear authentically aged and regularly used, with visible bookmarks and realistic browsing patterns.
+2. **Resolution & Architecture**:
+   - **Dedicated Profile Aging Engine** ([`tools/profile_aging.py`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/profile_aging.py)):
+     - Operates directly on the profile's SQLite database (`places.sqlite`).
+     - **Bookmarks Toolbar Seeding**: Injects 9 realistic everyday bookmarks directly into the toolbar folder (`parent = 3`): Google, YouTube, Reddit, Wikipedia, Amazon, Netflix, BBC News, Outlook, Weather.
+     - **Multi-Week Browsing History Seeding**: Injects 28+ realistic history visits across Google searches, Wikipedia articles, Reddit threads, and news outlets, with randomized visit timestamps and visit counts distributed across the past 3 to 28 days.
+     - **UI Toolbar Visibility (`xulstore.json`)**: Configures `"PersonalToolbar": {"collapsed": "false"}` so Firefox permanently renders the Bookmarks Toolbar directly below the address bar.
+   - **Camoufox & Firefox User Preferences**:
+     - Configured across [`tools/facebook_signup_camoufox.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/facebook_signup_camoufox.mjs), [`tools/instagram_signup_camoufox.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/instagram_signup_camoufox.mjs), [`tools/open_fb_profile.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/open_fb_profile.mjs), [`tools/open_ig_profile.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/open_ig_profile.mjs), and [`tools/setup_instagram_2fa.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/setup_instagram_2fa.mjs):
+       ```javascript
+       "browser.toolbars.bookmarks.visibility": "always",
+       "browser.urlbar.suggest.bookmark": true,
+       "browser.urlbar.suggest.history": true,
+       "browser.urlbar.suggest.topsites": true,
+       ```
+   - **Batch Migration**:
+     - Seeded all 44 existing Facebook and Instagram profile directories in `output/profiles facebook/` and `output/profiles instagram/`.
+
 ### [2026-11-18] Facebook Checkpoint 1501092823525282 Account Suspension Auto-Detection
 1. **Background & Root Cause**:
    - Facebook's account suspension / disabled endpoint URL is `https://www.facebook.com/checkpoint/1501092823525282/`.
