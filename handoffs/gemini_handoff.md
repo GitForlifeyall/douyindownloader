@@ -7,6 +7,23 @@ This document logs all architectural decisions, code changes, pipeline updates, 
 
 ## Session History & Major Changes
 
+### [2026-11-18] Facebook confirmemail.php Auto-Redirect & 2FA Setup "Done" Dismissal Fix
+1. **Instruction & Context**:
+   - The user instructed:
+     - *"if on otp you see https://www.facebook.com/confirmemail.php?next=undefined then redirect to https://www.facebook.com/confirmemail.php otp will automatically come do this before resend. if otp till dont come then resend"*
+     - *"also it got stuck on [image] after putting authentication code"* (attached screenshot showing the "Your two-factor authentication is set up" modal with the primary "Done" button).
+2. **Root Cause**:
+   - **confirmemail.php?next=undefined**: Facebook's registration flow often leaves `?next=undefined` in the query string, which halts Facebook's automatic backend email dispatch. Redirecting directly to `https://www.facebook.com/confirmemail.php` forces Facebook to immediately send the OTP code.
+   - **2FA Modal Stuck**: In `tools/setup_facebook_2fa.mjs`, State 6 was searching exclusively for a `Manage authentication` button. However, Meta renders a single blue `Done` button on the "Your two-factor authentication is set up" completion modal. Because it was waiting for `Manage authentication` without clicking `Done`, the modal remained open in foreground, preventing the script from accessing the 2FA settings and recovery codes.
+3. **Resolution**:
+   - In [`tools/facebook_signup_camoufox.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/facebook_signup_camoufox.mjs):
+     - Added auto-clean redirect: whenever the OTP URL contains `confirmemail.php` and `next=undefined`, it immediately redirects to `https://www.facebook.com/confirmemail.php` before polling and before each resend cycle.
+   - In [`tools/setup_facebook_2fa.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/setup_facebook_2fa.mjs):
+     - State 6 now immediately clicks the visible `Done` button (or fallback close button) to dismiss the setup wizard modal.
+     - State 7 immediately targets `Recovery codes`, `Backup codes`, and `Additional methods` on the revealed settings page.
+     - Added modal dismissal and `Additional methods` support to the dedicated `extractFacebookBackupCodesPass`.
+
+
 ### [2026-11-18] Fix Firefox / Camoufox "Unable to Connect" Network Error Recovery & DoH Disablement
 1. **Root Cause**:
    - The Firefox "Unable to connect / Camoufox can't connect to the server at www.facebook.com" (`about:neterror?e=connectionFailure`) occurs due to:

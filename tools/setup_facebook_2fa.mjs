@@ -472,6 +472,17 @@ async function extractFacebookBackupCodesPass(page, password = null, maxTries = 
 
     const bodyText = (await page.locator("body").innerText().catch(() => "")).replace(/\s+/g, " ");
 
+    // Dismiss "Your two-factor authentication is set up" modal if still open
+    if (bodyText.includes("Your two-factor authentication is set up")) {
+      const doneModalBtn = page.locator("div[role='dialog'] div[role='button']:visible:has-text('Done'), div[role='dialog'] button:visible:has-text('Done')").first();
+      if ((await doneModalBtn.count()) > 0 && (await doneModalBtn.isVisible().catch(() => false))) {
+        console.log("[Facebook 2FA] Dismissing setup completion dialog in recovery pass...");
+        await humanClick(page, doneModalBtn).catch(() => doneModalBtn.click());
+        await page.waitForTimeout(3000);
+        continue;
+      }
+    }
+
     // 1. Check if backup codes are currently visible
     if (bodyText.includes("Download codes") || bodyText.includes("Get new codes") || bodyText.includes("Save your backup codes") || bodyText.includes("Recovery codes")) {
       const codes = extractBackupCodesFromText(bodyText);
@@ -490,6 +501,15 @@ async function extractFacebookBackupCodesPass(page, password = null, maxTries = 
     if ((await recoveryBtn.count()) > 0 && (await recoveryBtn.isVisible())) {
       console.log("[Facebook 2FA] Clicking 'Recovery codes' / 'Backup codes' button...");
       await humanClick(page, recoveryBtn).catch(() => recoveryBtn.click());
+      await page.waitForTimeout(3000);
+      continue;
+    }
+
+    // 2.5 Check for "Additional methods" item
+    const addMethodsBtn = page.locator("div[role='button']:visible:has-text('Additional methods'), a:visible:has-text('Additional methods'), div:visible:has-text('Additional methods')").first();
+    if ((await addMethodsBtn.count()) > 0 && (await addMethodsBtn.isVisible().catch(() => false))) {
+      console.log("[Facebook 2FA] Clicking 'Additional methods' in recovery pass...");
+      await humanClick(page, addMethodsBtn).catch(() => addMethodsBtn.click());
       await page.waitForTimeout(3000);
       continue;
     }
@@ -699,26 +719,60 @@ export async function setupFacebook2FA(page, emailTarget, password = null, expli
       }
     }
 
-    // State 6: "Your two-factor authentication is set up" -> Click "Manage authentication"
+    // State 6: "Your two-factor authentication is set up" -> Click "Done" to close modal and reveal settings
     if (currentText.includes("Your two-factor authentication is set up") || currentText.includes("Manage authentication")) {
       confirmedOn = true;
-      console.log("[Facebook 2FA - State 6] 2FA set up screen detected. Clicking 'Manage authentication'...");
+      console.log("[Facebook 2FA - State 6] 'Your two-factor authentication is set up' detected! Dismissing dialog via 'Done' / 'Manage authentication'...");
+
       const manageBtn = container.locator("div[role='button']:visible:has-text('Manage authentication'), button:visible:has-text('Manage authentication')").first();
-      if ((await manageBtn.count()) > 0 && (await manageBtn.isVisible())) {
+      if ((await manageBtn.count()) > 0 && (await manageBtn.isVisible().catch(() => false))) {
         await humanClick(page, manageBtn).catch(() => manageBtn.click());
+        await page.waitForTimeout(4000);
+        continue;
+      }
+
+      // User screenshot shows the primary blue "Done" button
+      const doneBtn = container.locator("div[role='button']:visible:has-text('Done'), button:visible:has-text('Done')").first();
+      if ((await doneBtn.count()) > 0 && (await doneBtn.isVisible().catch(() => false))) {
+        console.log("[Facebook 2FA - State 6] Clicking 'Done' button to complete setup modal and reveal 2FA settings...");
+        await humanClick(page, doneBtn).catch(() => doneBtn.click());
+        await page.waitForTimeout(4000);
+        continue;
+      }
+
+      // Fallback: X button to dismiss modal
+      const closeBtn = container.locator("div[role='button'][aria-label='Close'], div[role='button']:has-text('Close'), svg[aria-label='Close']").first();
+      if ((await closeBtn.count()) > 0 && (await closeBtn.isVisible().catch(() => false))) {
+        console.log("[Facebook 2FA - State 6] Clicking 'Close' (X) to dismiss modal...");
+        await humanClick(page, closeBtn).catch(() => closeBtn.click());
         await page.waitForTimeout(4000);
         continue;
       }
     }
 
-    // State 7: "Two-factor authentication is on" -> Click "Recovery codes" / "Backup codes"
-    if (currentText.includes("Two-factor authentication is on") || currentText.includes("How you get login codes")) {
+    // State 7: "Two-factor authentication is on" -> Click "Recovery codes" / "Backup codes" / "Additional methods"
+    if (currentText.includes("Two-factor authentication is on") || currentText.includes("How you get login codes") || currentText.includes("Additional methods") || currentText.includes("Recovery codes")) {
       confirmedOn = true;
       console.log("[Facebook 2FA - State 7] 'Two-factor authentication is on' screen detected. Opening 'Recovery codes' / 'Backup codes'...");
-      const recoveryBtn = container.locator("div[role='button']:visible:has-text('Recovery codes'), div[role='button']:visible:has-text('Backup codes'), a:visible:has-text('Recovery codes'), a:visible:has-text('Backup codes')").first();
-      if ((await recoveryBtn.count()) > 0 && (await recoveryBtn.isVisible())) {
+      const recoveryBtn = page.locator("div[role='button']:visible:has-text('Recovery codes'), div[role='button']:visible:has-text('Backup codes'), a:visible:has-text('Recovery codes'), a:visible:has-text('Backup codes'), span:visible:has-text('Recovery codes'), span:visible:has-text('Backup codes')").first();
+      if ((await recoveryBtn.count()) > 0 && (await recoveryBtn.isVisible().catch(() => false))) {
         await humanClick(page, recoveryBtn).catch(() => recoveryBtn.click());
         await page.waitForTimeout(4000);
+        continue;
+      }
+
+      const addMethodsBtn = page.locator("div[role='button']:visible:has-text('Additional methods'), a:visible:has-text('Additional methods'), div:visible:has-text('Additional methods')").first();
+      if ((await addMethodsBtn.count()) > 0 && (await addMethodsBtn.isVisible().catch(() => false))) {
+        console.log("[Facebook 2FA - State 7] Clicking 'Additional methods'...");
+        await humanClick(page, addMethodsBtn).catch(() => addMethodsBtn.click());
+        await page.waitForTimeout(3000);
+        continue;
+      }
+
+      const manageBtn = page.locator("div[role='button']:visible:has-text('Manage authentication'), button:visible:has-text('Manage authentication')").first();
+      if ((await manageBtn.count()) > 0 && (await manageBtn.isVisible().catch(() => false))) {
+        await humanClick(page, manageBtn).catch(() => manageBtn.click());
+        await page.waitForTimeout(3000);
         continue;
       }
     }

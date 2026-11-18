@@ -1403,6 +1403,15 @@ async function handleOtpChallenge(page, targetEmail, cId, rToken, sessionStartTi
   console.log("[Facebook] >>> ENTER CONFIRMATION CODE SCREEN DETECTED! <<<");
   console.log("=".repeat(60));
 
+  // Handle ?next=undefined on confirmemail.php per user instruction:
+  // "if on otp you see https://www.facebook.com/confirmemail.php?next=undefined then redirect to https://www.facebook.com/confirmemail.php otp will automatically come do this before resend. if otp till dont come then resend"
+  const initialOtpUrl = page.url() || "";
+  if (initialOtpUrl.includes("confirmemail.php") && initialOtpUrl.includes("next=undefined")) {
+    console.log("[Facebook] Detected 'confirmemail.php?next=undefined'. Redirecting cleanly to https://www.facebook.com/confirmemail.php so OTP will automatically be dispatched...");
+    await safeGoto(page, "https://www.facebook.com/confirmemail.php", { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.waitForTimeout(3000);
+  }
+
   const isOutlookAccount = Boolean(cId && rToken) || /@(outlook|hotmail|live|msn)\./i.test(targetEmail);
   let otpData = null;
 
@@ -1427,9 +1436,17 @@ async function handleOtpChallenge(page, targetEmail, cId, rToken, sessionStartTi
       }
 
       if (round < maxRounds) {
-        console.log(`[Facebook] ⚠️ OTP not received within ${roundTimeoutSec}s. Triggering 'Resend OTP'...`);
-        await resendFacebookOtp(page);
-        await page.waitForTimeout(2000);
+        // If on confirmemail.php?next=undefined, clean redirect first per user rule
+        const curCheckUrl = page.url() || "";
+        if (curCheckUrl.includes("confirmemail.php") && curCheckUrl.includes("next=undefined")) {
+          console.log("[Facebook] Cleaning 'confirmemail.php?next=undefined' to trigger automatic OTP dispatch before resend...");
+          await safeGoto(page, "https://www.facebook.com/confirmemail.php", { waitUntil: "domcontentloaded", timeout: 30000 });
+          await page.waitForTimeout(3000);
+        } else {
+          console.log(`[Facebook] ⚠️ OTP not received within ${roundTimeoutSec}s. Triggering 'Resend OTP'...`);
+          await resendFacebookOtp(page);
+          await page.waitForTimeout(2000);
+        }
       }
     }
   } else if (targetEmail.endsWith("@lnovic.com")) {
@@ -2258,7 +2275,7 @@ async function run() {
       } else {
         await fnInput.waitFor({ state: "visible", timeout: 10000 }).catch(async () => {
           console.warn("[Facebook] First Name input still not visible. Refreshing page...");
-          await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
+          await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => { });
           await page.waitForTimeout(3500);
         });
         if ((await fnInput.count()) > 0 && (await fnInput.isVisible().catch(() => false))) {
@@ -2273,7 +2290,7 @@ async function run() {
       if ((await lnInput.count()) > 0 && (await lnInput.isVisible().catch(() => false))) {
         await humanType(page, lnInput, lastName);
       } else {
-        await lnInput.waitFor({ state: "visible", timeout: 8000 }).catch(() => {});
+        await lnInput.waitFor({ state: "visible", timeout: 8000 }).catch(() => { });
         if (await lnInput.isVisible().catch(() => false)) {
           await humanType(page, lnInput, lastName);
         }
@@ -2291,7 +2308,7 @@ async function run() {
       if ((await emInput.count()) > 0 && (await emInput.isVisible().catch(() => false))) {
         await humanType(page, emInput, email);
       } else {
-        await emInput.waitFor({ state: "visible", timeout: 8000 }).catch(() => {});
+        await emInput.waitFor({ state: "visible", timeout: 8000 }).catch(() => { });
         if (await emInput.isVisible().catch(() => false)) {
           await humanType(page, emInput, email);
         }
@@ -2310,7 +2327,7 @@ async function run() {
       if ((await pwInput.count()) > 0 && (await pwInput.isVisible().catch(() => false))) {
         await humanType(page, pwInput, password);
       } else {
-        await pwInput.waitFor({ state: "visible", timeout: 8000 }).catch(() => {});
+        await pwInput.waitFor({ state: "visible", timeout: 8000 }).catch(() => { });
         if (await pwInput.isVisible().catch(() => false)) {
           await humanType(page, pwInput, password);
         }
