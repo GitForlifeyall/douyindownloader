@@ -7,6 +7,15 @@ This document logs all architectural decisions, code changes, pipeline updates, 
 
 ## Session History & Major Changes
 
+### [2026-11-18] Facebook Registration Form Field Synchronization & Visible Selector Hardening
+1. **Root Cause**:
+   - Modern Facebook desktop registration on `/reg/` uses dynamic React DOM with anonymous fields (`name=""`, `placeholder=""`, null `aria-label`).
+   - Clicking "Create new account" on landing navigates to `/reg/?entry_point=login`, but the script did not wait for the URL change or page hydration. Fallback selectors like `input[type='text'].nth(0)` matched hidden inputs from the previous page, causing `locator.waitFor: Timeout 15000ms exceeded waiting for locator('input[type=\'text\']').first() to be visible`.
+2. **Resolution**:
+   - In [`tools/facebook_signup_camoufox.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/facebook_signup_camoufox.mjs), added `page.waitForURL` when clicking "Create new account" and enforced direct navigation to `/reg/?entry_point=login&locale=en_US` if not already on the registration endpoint.
+   - Added explicit `page.waitForSelector("input[type='text']:visible")` to ensure DOM hydration.
+   - Updated all input locators (First Name, Surname, Email, Password) to strictly filter by `:visible` pseudo-class (e.g. `input[type='text']:visible.nth(0)`, `nth(1)`, `nth(2)`), completely eliminating hidden-element timeout hangs.
+
 ### [2026-11-18] WebGL OS SQLite Database Pool Alignment (`No WebGL data found for OS: win` Fix)
 1. **Root Cause**:
    - `tools/facebook_signup_camoufox.mjs`, `tools/open_fb_profile.mjs`, and `tools/open_ig_profile.mjs` had `GPU_CONFIGURATIONS` populated with synthetic ANGLE GPU names (e.g. `RTX 3060`, `RTX 4060`, `Iris Xe Direct3D11 vs_5_0 ps_5_0, D3D11`).

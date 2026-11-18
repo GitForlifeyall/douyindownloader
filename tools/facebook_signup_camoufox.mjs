@@ -1842,8 +1842,11 @@ async function run() {
         console.log("[Facebook] Natural interaction: Hovering & clicking 'Create new account' button...");
         await humanHover(page, createAccBtn).catch(() => {});
         await page.waitForTimeout(400 + Math.random() * 300);
-        await humanClick(page, createAccBtn).catch(() => createAccBtn.click());
-        console.log("[Facebook] Registration dialog opened. Waiting 2.5s for modal animation...");
+        await Promise.all([
+          page.waitForURL((url) => url.pathname.includes("/reg") || url.search.includes("entry_point=login"), { timeout: 15000 }).catch(() => {}),
+          humanClick(page, createAccBtn).catch(() => createAccBtn.click()),
+        ]);
+        console.log("[Facebook] Waiting for registration page/modal to settle...");
         await page.waitForTimeout(2500);
       } else {
         console.log("[Facebook] Direct navigation fallback: navigating to registration endpoint...");
@@ -1851,18 +1854,29 @@ async function run() {
         await page.waitForTimeout(2500);
       }
 
+      // If we are still not on /reg/, navigate directly to ensure inputs are exposed
+      if (!page.url().includes("/reg")) {
+        console.log("[Facebook] Navigating directly to /reg/?entry_point=login&locale=en_US...");
+        await safeGoto(page, "https://www.facebook.com/reg/?entry_point=login&locale=en_US", { waitUntil: "domcontentloaded", timeout: 40000 });
+        await page.waitForTimeout(2500);
+      }
+
+      // Wait for registration input fields to be visible
+      console.log("[Facebook] Waiting for registration input fields to become visible...");
+      await page.waitForSelector("input[type='text']:visible, input[name='firstname']:visible", { timeout: 20000 }).catch(() => {});
+
       // 1. Fill First Name & Surname
       console.log(`[Facebook] Typing Name: ${firstName} ${lastName}...`);
-      let fnInput = page.locator("input[name='firstname'], input[aria-label*='First name' i], input[placeholder*='First name' i]").first();
-      if ((await fnInput.count()) === 0) {
-        fnInput = page.locator("input[type='text'], input:not([type])").nth(0);
+      let fnInput = page.locator("input[name='firstname']:visible, input[aria-label*='First name' i]:visible, input[placeholder*='First name' i]:visible").first();
+      if ((await fnInput.count()) === 0 || !(await fnInput.isVisible().catch(() => false))) {
+        fnInput = page.locator("input[type='text']:visible").nth(0);
       }
       await fnInput.waitFor({ state: "visible", timeout: 15000 });
       await humanType(page, fnInput, firstName);
 
-      let lnInput = page.locator("input[name='lastname'], input[aria-label*='Surname' i], input[placeholder*='Surname' i], input[aria-label*='Last name' i]").first();
-      if ((await lnInput.count()) === 0) {
-        lnInput = page.locator("input[type='text'], input:not([type])").nth(1);
+      let lnInput = page.locator("input[name='lastname']:visible, input[aria-label*='Surname' i]:visible, input[placeholder*='Surname' i]:visible, input[aria-label*='Last name' i]:visible").first();
+      if ((await lnInput.count()) === 0 || !(await lnInput.isVisible().catch(() => false))) {
+        lnInput = page.locator("input[type='text']:visible").nth(1);
       }
       await lnInput.waitFor({ state: "visible", timeout: 15000 });
       await humanType(page, lnInput, lastName);
@@ -1872,22 +1886,23 @@ async function run() {
 
       // 3. Fill Mobile number or email address
       console.log(`[Facebook] Entering Email: ${email}...`);
-      let emInput = page.locator("input[name='reg_email__'], input[aria-label*='Mobile number or email' i], input[placeholder*='Mobile number or email' i]").first();
-      if ((await emInput.count()) === 0) {
-        emInput = page.locator("input[type='text'], input:not([type])").nth(2);
+      let emInput = page.locator("input[name='reg_email__']:visible, input[aria-label*='Mobile number or email' i]:visible, input[placeholder*='Mobile number or email' i]:visible").first();
+      if ((await emInput.count()) === 0 || !(await emInput.isVisible().catch(() => false))) {
+        emInput = page.locator("input[type='text']:visible").nth(2);
       }
       await emInput.waitFor({ state: "visible", timeout: 15000 });
       await humanType(page, emInput, email);
 
       // Re-enter email confirmation if required
-      const reEmInput = page.locator("input[name='reg_email_confirmation__']").first();
+      await page.waitForTimeout(600);
+      const reEmInput = page.locator("input[name='reg_email_confirmation__']:visible, input[aria-label*='Re-enter' i]:visible, input[placeholder*='Re-enter' i]:visible").first();
       if ((await reEmInput.count()) > 0 && (await reEmInput.isVisible().catch(() => false))) {
         await humanType(page, reEmInput, email);
       }
 
       // 4. Fill Password
-      console.log(`[Facebook] Entering Password: ${password}...`);
-      let pwInput = page.locator("input[name='reg_passwd__'], input[type='password']").first();
+      console.log(`[Facebook] Entering Password (masked)...`);
+      let pwInput = page.locator("input[name='reg_passwd__']:visible, input[type='password']:visible").first();
       await pwInput.waitFor({ state: "visible", timeout: 15000 });
       await humanType(page, pwInput, password);
 
