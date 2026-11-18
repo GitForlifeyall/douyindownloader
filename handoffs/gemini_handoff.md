@@ -7,6 +7,18 @@ This document logs all architectural decisions, code changes, pipeline updates, 
 
 ## Session History & Major Changes
 
+### [2026-11-18] Facebook React Custom Combobox Selector Fix (Date of Birth & Gender)
+1. **Root Cause**:
+   - Modern Facebook `/reg/` desktop UI uses React custom `[role='combobox']` elements with `[aria-haspopup='listbox']` and `[role='option']` dropdown popups, not native HTML `<select>` elements.
+   - The script previously assumed index-based order `["month", "day", "year", "gender"]` for English. However, modern Facebook renders the layout as `Day -> Month -> Year -> Gender`. Because index 0 was assumed to be "Month", the script searched for month names inside the "Day" dropdown (options 1-31), failing to match and leaving the dropdown stuck open.
+2. **Resolution & Semantic Selection**:
+   - In [`tools/facebook_signup_camoufox.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/facebook_signup_camoufox.mjs), rebuilt `fillBirthdayAndGender` and added `selectCustomCombobox`:
+     - **Direct Semantic Target Locators**: Identifies each combobox by its dedicated `aria-label` attribute (`Select Day`, `Select Month`, `Select Year`) and visible label/text rather than fragile numeric indices.
+     - **Existing Open State Handling**: Automatically detects if the options popup is already open from user interaction, avoiding accidental closing toggles.
+     - **Auto-scroll & Selection**: Employs `scrollIntoViewIfNeeded()` before kinematic mouse click to smoothly handle long lists (years 1980–2005, days 1–31, months January–December).
+     - **Dual Gender Support**: Handles both modern custom combobox gender selectors and fallback radio buttons (`input[type='radio'][value='1']` / `2`).
+   - Verified live in Camoufox behind simulated registration page: 100% success on Day, Month, Year, and Gender.
+
 ### [2026-11-18] Multi-Layer English Language Enforcement Against Proxy Regional Language Bleed
 1. **Root Cause**:
    - When regional residential proxies are used (e.g. India `-cc-in` / `city-ahmedabad`, Japan `-cc-jp`, Germany `-cc-de`), Meta detects the IP territory or Camoufox's default `geoip: true` behaviour without an explicit `locale` configuration, causing the UI to flip into local regional languages (Gujarati, Hindi, Japanese, German, etc.).

@@ -1042,54 +1042,94 @@ function saveRegisteredAccount(record) {
 }
 
 // ----------------------------------------------------
+// ----------------------------------------------------
 // Robust Birthday & Gender Combobox Selector
 // ----------------------------------------------------
-async function fillBirthdayAndGender(page, dobObj, targetGender) {
-  console.log(`[Facebook] Setting Birthday (${dobObj.formatted}) and Gender (${targetGender})...`);
-  const comboboxes = page.locator("[role='combobox']");
-  const count = await comboboxes.count();
-  console.log(`[Facebook] Found ${count} comboboxes on registration form.`);
-
-  // Detect whether format is DD/MM/YYYY (Hindi/UK) or MM/DD/YYYY (US English)
-  const firstText = (await comboboxes.nth(0).innerText().catch(() => "")).toLowerCase();
-  const pageText = await page.evaluate(() => (document.body ? document.body.innerText : ""));
-  const isHindi = firstText.includes("दिन") || pageText.includes("जन्मदिन");
-
-  let order;
-  if (isHindi) {
-    console.log("[Facebook] Format detected: Hindi/Regional (Day -> Month -> Year -> Gender)");
-    order = ["day", "month", "year", "gender"];
-  } else {
-    console.log("[Facebook] Format detected: US English (Month -> Day -> Year -> Gender)");
-    order = ["month", "day", "year", "gender"];
+async function selectCustomCombobox(page, name, locator, regex) {
+  let box = locator.first();
+  if ((await box.count()) === 0 || !(await box.isVisible().catch(() => false))) {
+    return false;
   }
 
-  for (let i = 0; i < count && i < order.length; i++) {
-    const fieldType = order[i];
-    const combo = comboboxes.nth(i);
-    await humanClick(page, combo).catch(() => combo.click());
-    await page.waitForTimeout(300 + Math.random() * 200);
+  // Check if dropdown popup is already open from user interaction
+  let opt = page.locator("[role='option']").filter({ hasText: regex }).first();
+  if ((await opt.count()) === 0 || !(await opt.isVisible().catch(() => false))) {
+    await humanClick(page, box).catch(() => box.click());
+    await page.waitForTimeout(350 + Math.random() * 150);
+    opt = page.locator("[role='option']").filter({ hasText: regex }).first();
+  }
 
-    let regex;
-    if (fieldType === "day") {
-      regex = new RegExp(`^(?:${dobObj.day}|${dobObj.dayStr}|[०-९]+)$`);
-    } else if (fieldType === "month") {
-      regex = new RegExp(`^(?:${dobObj.month}|${dobObj.month.slice(0, 3)}|${dobObj.monthHindi})$`, "i");
-    } else if (fieldType === "year") {
-      regex = new RegExp(`^(?:${dobObj.year}|[०-९]+)$`);
-    } else if (fieldType === "gender") {
-      regex = targetGender === "Female" ? /^(?:female|महिला)$/i : /^(?:male|पुरुष)$/i;
+  if ((await opt.count()) > 0) {
+    await opt.scrollIntoViewIfNeeded().catch(() => {});
+    await humanClick(page, opt).catch(() => opt.click());
+    await page.waitForTimeout(300 + Math.random() * 150);
+    const txt = (await box.innerText().catch(() => "")).trim();
+    console.log(`[Facebook] Set ${name} to: '${txt.replace(/\n/g, " - ")}'`);
+    return true;
+  }
+
+  // Fallback: iterate all options if exact filter was hidden
+  const allOpts = page.locator("[role='option']");
+  const optCount = await allOpts.count();
+  for (let j = 0; j < optCount; j++) {
+    const item = allOpts.nth(j);
+    const text = (await item.innerText().catch(() => "")).trim();
+    if (regex.test(text)) {
+      await item.scrollIntoViewIfNeeded().catch(() => {});
+      await humanClick(page, item).catch(() => item.click());
+      await page.waitForTimeout(300 + Math.random() * 150);
+      const txt = (await box.innerText().catch(() => "")).trim();
+      console.log(`[Facebook] Set ${name} via scroll to: '${txt.replace(/\n/g, " - ")}'`);
+      return true;
     }
+  }
 
-    const opt = page.locator("[role='option']").filter({ hasText: regex }).first();
-    if ((await opt.count()) > 0) {
-      await humanClick(page, opt).catch(() => opt.click());
-      await page.waitForTimeout(300 + Math.random() * 200);
-      const val = (await combo.innerText()).trim();
-      console.log(`[Facebook] Combobox ${i} (${fieldType}) set to: '${val.replace(/\n/g, " - ")}'`);
-    } else {
-      console.warn(`[Facebook] Warning: Option matching ${regex} for ${fieldType} not found.`);
-      await combo.click().catch(() => { });
+  console.warn(`[Facebook] Warning: Option matching ${regex} for ${name} not found.`);
+  return false;
+}
+
+async function fillBirthdayAndGender(page, dobObj, targetGender) {
+  console.log(`[Facebook] Setting Birthday (${dobObj.formatted}) and Gender (${targetGender})...`);
+
+  // Check 1: Native HTML <select> elements (fallback for legacy or mobile views)
+  const daySelect = page.locator("select[name='birthday_day']").first();
+  const monthSelect = page.locator("select[name='birthday_month']").first();
+  const yearSelect = page.locator("select[name='birthday_year']").first();
+  if ((await daySelect.count()) > 0 && (await daySelect.isVisible().catch(() => false))) {
+    console.log("[Facebook] Native HTML <select> dropdowns detected.");
+    await daySelect.selectOption(String(dobObj.day)).catch(() => {});
+    await monthSelect.selectOption(String(dobObj.monthIndex || dobObj.month)).catch(() => {});
+    await yearSelect.selectOption(String(dobObj.year)).catch(() => {});
+  } else {
+    // Check 2: Modern Facebook React Comboboxes (targeted semantically by aria-label & text)
+    // 1. Day
+    const dayBox = page.locator("[role='combobox'][aria-label*='Day' i], [role='combobox']:has-text('Day'), [role='combobox'][aria-label*='दिन' i], [role='combobox']:has-text('दिन'), [role='combobox'][aria-label*='તારીખ' i]");
+    const dayRegex = new RegExp(`^(?:${dobObj.day}|${dobObj.dayStr}|[०-९]+)$`);
+    await selectCustomCombobox(page, "Day", dayBox, dayRegex);
+
+    // 2. Month
+    const monthBox = page.locator("[role='combobox'][aria-label*='Month' i], [role='combobox']:has-text('Month'), [role='combobox'][aria-label*='महीना' i], [role='combobox']:has-text('महीना'), [role='combobox'][aria-label*='મહિનો' i]");
+    const monthRegex = new RegExp(`^(?:${dobObj.month}|${dobObj.month.slice(0, 3)}|${dobObj.monthHindi})$`, "i");
+    await selectCustomCombobox(page, "Month", monthBox, monthRegex);
+
+    // 3. Year
+    const yearBox = page.locator("[role='combobox'][aria-label*='Year' i], [role='combobox']:has-text('Year'), [role='combobox'][aria-label*='वर्ष' i], [role='combobox']:has-text('वर्ष')");
+    const yearRegex = new RegExp(`^(?:${dobObj.year}|[०-९]+)$`);
+    await selectCustomCombobox(page, "Year", yearBox, yearRegex);
+  }
+
+  // Gender Selection: Handle Combobox OR Radio Buttons
+  const genderBox = page.locator("[role='combobox'][aria-label*='gender' i], [role='combobox']:has-text('gender'), [role='combobox'][aria-label*='लिंग' i], [role='combobox']:has-text('लिंग'), [role='combobox'][aria-label*='જાતિ' i]");
+  if ((await genderBox.count()) > 0 && (await genderBox.first().isVisible().catch(() => false))) {
+    const genderRegex = targetGender === "Female" ? /^(?:female|महिला|સ્ત્રી)$/i : /^(?:male|पुरुष|પુરુષ)$/i;
+    await selectCustomCombobox(page, "Gender", genderBox, genderRegex);
+  } else {
+    // Radio buttons fallback
+    const radioVal = targetGender === "Female" ? "1" : "2";
+    const radioBtn = page.locator(`input[type='radio'][value='${radioVal}'], label:has-text('${targetGender}') input[type='radio'], input[type='radio'][aria-label*='${targetGender}' i]`).first();
+    if ((await radioBtn.count()) > 0 && (await radioBtn.isVisible().catch(() => false))) {
+      await humanClick(page, radioBtn).catch(() => radioBtn.click());
+      console.log(`[Facebook] Selected gender radio: ${targetGender}`);
     }
   }
 }
