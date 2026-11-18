@@ -48,7 +48,6 @@ const clientId = getArg("--client-id");
 const refreshToken = getArg("--refresh-token");
 const DEFAULT_PROXY = "customer-resi_4edb25d7:fo4ENfj4pMx+@pr.oxylabs.io:7777";
 const proxyArg = getArg("--proxy", DEFAULT_PROXY);
-const proxyArg = getArg("--proxy");
 const tempMailFlag = hasFlag("--temp-mail");
 const headless = hasFlag("--headless");
 
@@ -241,12 +240,6 @@ async function pollOutlookVerification(cId, rToken, maxWaitSec = 60) {
         }
       }
     } catch (err) {
-      console.warn(`[Camoufox] Outlook poll note: ${err.message}`);
-    }
-    await new Promise((r) => setTimeout(r, 4000));
-  }
-  return null;
-}
       console.warn(`[Camoufox] Outlook poll note: ${err.message}`);
     }
     await new Promise((r) => setTimeout(r, 4000));

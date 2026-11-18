@@ -1325,6 +1325,7 @@ async function handleOtpChallenge(page, targetEmail, cId, rToken, sessionStartTi
     console.log("[Facebook] OTP submitted. Waiting 10s for confirmation...");
     await page.waitForTimeout(10000);
     riskMark("otp_submitted");
+    console.log(`[Facebook] Current URL: ${page.url()} | Title: '${await page.title()}'`);
     const postOtpUrl = page.url() || "";
     console.log(`[Facebook] Current URL: ${postOtpUrl} | Title: '${await page.title()}'`);
 

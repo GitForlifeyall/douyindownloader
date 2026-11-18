@@ -7,6 +7,16 @@ This document logs all architectural decisions, code changes, pipeline updates, 
 
 ## Session History & Major Changes
 
+### [2026-11-18] Syntax Fix: facebook_signup_camoufox.mjs & metricool_camoufox.mjs
+1. **Root Cause**:
+   - In [`tools/facebook_signup_camoufox.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/facebook_signup_camoufox.mjs), an unclosed suspension `if` check from a prior edit created a duplicate nested block that mismatched braces before `finally {`, throwing `SyntaxError: Unexpected token 'finally'`.
+   - In [`tools/metricool_camoufox.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/metricool_camoufox.mjs), duplicate identifier declarations and trailing braces were identified.
+2. **Resolution**:
+   - Cleaned up control flow in `facebook_signup_camoufox.mjs`: verified and matched all braces across the `try / finally` execution wrapper.
+   - Removed duplicate `proxyArg` declaration and leftover braces in `metricool_camoufox.mjs`.
+   - Verified 100% syntax compliance across all `.mjs` scripts in `tools/` with `node --check`.
+
+
 ### [2026-11-18] Facebook Two-Factor Authentication (TOTP App) & Recovery Codes Engine
 1. **Instruction & Flow**:
    - The user instructed to configure Facebook Two-Factor Authentication (TOTP authenticator app) and backup/recovery codes before Facebook Page creation.
