@@ -133,13 +133,14 @@ function ensureStickyProxy(proxyStr, seed = null) {
   let [username, password] = auth.split(":");
   if (!username) return `http://${clean}`;
 
-  // If using Oxylabs residential proxies (pr.oxylabs.io or customer-*), guarantee a 30-minute sticky session id
+  // If using Oxylabs residential/mobile proxies, guarantee a 30-minute
+  // single-IP session. `sessid_oneip` fails (502) rather than silently rotating.
   if (hostPort.includes("oxylabs.io") || username.startsWith("customer-")) {
     if (!username.includes("sessid") && !username.includes("session")) {
       const sessId = seed
         ? crypto.createHash("md5").update(String(seed)).digest("hex").slice(0, 8)
         : crypto.randomBytes(4).toString("hex");
-      username = `${username}-sessid-${sessId}-sesstime-30`;
+      username = `${username}-sessid_oneip-${sessId}-sesstime-30`;
     }
   }
   return `http://${username}:${password}@${hostPort}`;
@@ -151,16 +152,32 @@ function parseProxyIdentity(proxyStr) {
   const auth = at >= 0 ? clean.slice(0, at) : "";
   const host = at >= 0 ? clean.slice(at + 1) : clean;
   const username = auth.split(":")[0] || "";
-  const sessionMatch = username.match(/(?:^|[-_])(?:sessid|session|sess)[-_]([A-Za-z0-9]+)/i);
+
+  // Oxylabs sticky syntax: sessid-<id>, sessid_oneip-<id>, optional
+  // -sesstime-<minutes>. `sess`/`session` are kept for older custom formats.
+  const sessionMatch = username.match(/(?:^|[-_])(sessid_oneip|sessid|session|sess)[-_]([A-Za-z0-9._]+)/i);
+  const sessionType = sessionMatch ? sessionMatch[1].toLowerCase() : null;
+  const session = sessionMatch ? sessionMatch[2] : null;
+  const sessionTimeMatch = username.match(/-sesstime-(\d+)/i);
+
+  // Static/sticky entry ports (10001-49999) are another Oxylabs stickiness mode.
+  const portMatch = host.match(/:(\d+)$/);
+  const port = portMatch ? Number(portMatch[1]) : null;
+  const stickyPort = port != null && port >= 10001 && port <= 49999 ? port : null;
+
   const countryMatch = username.match(/-cc-([a-z]{2})(?:[-_]|$)/i);
   const stateMatch = username.match(/-st-([a-z_]+)(?:[-_]|$)/i);
   return {
     host: host || null,
     username_hash: username ? crypto.createHash("sha256").update(String(username)).digest("hex").slice(0, 16) : null,
-    session: sessionMatch ? sessionMatch[1] : null,
+    session,
+    session_type: sessionType,
+    session_minutes: sessionTimeMatch ? Number(sessionTimeMatch[1]) : null,
+    sticky_port: stickyPort,
     country: countryMatch ? countryMatch[1].toUpperCase() : null,
     state: stateMatch ? stateMatch[1] : null,
-    has_sticky_session: Boolean(sessionMatch),
+    has_sticky_session: Boolean(session || stickyPort),
+    strict_sticky: sessionType === "sessid_oneip" || Boolean(stickyPort),
   };
 }
 

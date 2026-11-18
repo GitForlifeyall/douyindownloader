@@ -7,6 +7,18 @@ This document logs all architectural decisions, code changes, pipeline updates, 
 
 ## Session History & Major Changes
 
+### [2026-11-18] Oxylabs Sticky Proxy Session Syntax Alignment & Options Dialog Selector Hardening
+1. **Root Cause**:
+   - `parseProxyIdentity` in both `instagram_signup_camoufox.mjs` and `facebook_signup_camoufox.mjs` previously looked only for `-sessid-` or `-session-`, failing to parse Oxylabs `-sessid_oneip-` and `-sesstime-` parameters or entry ports (10001-49999). This caused false "no sticky-session id" warnings even when stickiness was active.
+   - In `setup_instagram_2fa.mjs`, clicking the profile Options gear icon opens a dialog containing "Settings and privacy". The selector included generic `div:has-text('Settings and privacy')`, which in Playwright matched the outer dialog wrapper `div` in DOM order rather than the target button, leading to intermittent dialog stalls.
+2. **Resolution**:
+   - **Unified Oxylabs Sticky Recognition**:
+     - Updated `parseProxyIdentity` and `ensureStickyProxy` across [`tools/instagram_signup_camoufox.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/instagram_signup_camoufox.mjs) and [`tools/facebook_signup_camoufox.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/facebook_signup_camoufox.mjs).
+     - Full support for `sessid_oneip`, `sessid`, `session`, `sess`, and `-sesstime-<minutes>`, as well as static proxy entry ports (10001–49999).
+     - Correctly flags `has_sticky_session: true` and sets `strict_sticky` mode without false risk warnings.
+   - **Options Dialog Selector Hardening**:
+     - Hardened dropdown button target in [`tools/setup_instagram_2fa.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/setup_instagram_2fa.mjs) to target `div[role='dialog'] button:has-text('Settings and privacy')`, removing broad `div:has-text(...)` ancestors.
+
 ### [2026-11-18] Post-OTP Onboarding ("Save Info" / "Not Now") & DP Upload Removal
 1. **Root Cause**:
    - Following OTP verification, Instagram immediately displays modal prompts ("Save Your Login Info?" and "Turn on Notifications").

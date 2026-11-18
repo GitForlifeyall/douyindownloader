@@ -127,13 +127,15 @@ function ensureStickyProxy(proxyStr, seed = null) {
   let [username, password] = auth.split(":");
   if (!username) return `http://${clean}`;
 
-  // If using Oxylabs residential proxies (pr.oxylabs.io or customer-*), guarantee a 30-minute sticky session id
+  // If using Oxylabs residential/mobile proxies, guarantee a 30-minute
+  // single-IP session. `sessid_oneip` fails (502) rather than silently rotating,
+  // which is what the risk log now treats as a hard abort.
   if (hostPort.includes("oxylabs.io") || username.startsWith("customer-")) {
     if (!username.includes("sessid") && !username.includes("session")) {
       const sessId = seed
         ? crypto.createHash("md5").update(String(seed)).digest("hex").slice(0, 8)
         : crypto.randomBytes(4).toString("hex");
-      username = `${username}-sessid-${sessId}-sesstime-30`;
+      username = `${username}-sessid_oneip-${sessId}-sesstime-30`;
     }
   }
   return `http://${username}:${password}@${hostPort}`;
@@ -145,16 +147,37 @@ function parseProxyIdentity(proxyStr) {
   const auth = at >= 0 ? clean.slice(0, at) : "";
   const host = at >= 0 ? clean.slice(at + 1) : clean;
   const username = auth.split(":")[0] || "";
-  const sessionMatch = username.match(/(?:^|[-_])(?:sessid|session|sess)[-_]([A-Za-z0-9]+)/i);
+
+  // Oxylabs sticky syntax: sessid-<id>, sessid_oneip-<id>, optional
+  // -sesstime-<minutes>. `sess`/`session` are kept for older custom formats.
+  // The id character class deliberately excludes '-' so -sesstime- is not
+  // swallowed into the session id.
+  const sessionMatch = username.match(/(?:^|[-_])(sessid_oneip|sessid|session|sess)[-_]([A-Za-z0-9._]+)/i);
+  const sessionType = sessionMatch ? sessionMatch[1].toLowerCase() : null;
+  const session = sessionMatch ? sessionMatch[2] : null;
+  const sessionTimeMatch = username.match(/-sesstime-(\d+)/i);
+
+  // Oxylabs static ports: residential sticky ports are 10001-49999; DC/ISP
+  // static IPs start at 8001 (8000 is the rotating backconnect port).
+  const portMatch = host.match(/:(\d+)$/);
+  const port = portMatch ? Number(portMatch[1]) : null;
+  const stickyPort = port != null && (port >= 8001) ? port : null;
+
   const countryMatch = username.match(/-cc-([a-z]{2})(?:[-_]|$)/i);
   const stateMatch = username.match(/-st-([a-z_]+)(?:[-_]|$)/i);
   return {
     host: host || null,
     username_hash: username ? sha256Short(username, 16) : null,
-    session: sessionMatch ? sessionMatch[1] : null,
+    session,
+    session_type: sessionType,
+    session_minutes: sessionTimeMatch ? Number(sessionTimeMatch[1]) : null,
+    sticky_port: stickyPort,
     country: countryMatch ? countryMatch[1].toUpperCase() : null,
     state: stateMatch ? stateMatch[1] : null,
-    has_sticky_session: Boolean(sessionMatch),
+    has_sticky_session: Boolean(session || stickyPort),
+    // sessid_oneip and sticky ports fail instead of rotating; treat them as
+    // strict so a mid-run IP change can abort the flow.
+    strict_sticky: sessionType === "sessid_oneip" || Boolean(stickyPort),
   };
 }
 
@@ -940,7 +963,14 @@ async function captureExitIp(page, step, known = null) {
     if (entry.org) RISK.proxy.org = entry.org;
     const first = RISK.exit_ips[0];
     if (RISK.exit_ips.length > 1 && first.ip && entry.ip && first.ip !== entry.ip) {
-      riskWarn(`Exit IP changed during the run: ${first.ip} -> ${entry.ip} (@${step}). Use one sticky session for the whole account.`);
+      const message = `Exit IP changed during the run: ${first.ip} -> ${entry.ip} (@${step}).`;
+      riskWarn(message);
+      if (RISK.proxy.strict_sticky) {
+        // A sessid_oneip / sticky-port session must never change IP mid-run.
+        // Continuing would link attempts from multiple exits, which is the
+        // exact signal the risk log exists to catch.
+        throw new Error(`[Risk] Bound proxy session changed exit IP (${first.ip} -> ${entry.ip}) at ${step}. Aborting.`);
+      }
     }
   }
   console.log(`[Risk] Exit IP @ ${step}: ${entry.ip || "unknown"}${entry.asn ? ` | ASN ${entry.asn}` : ""}${entry.city ? ` | ${entry.city}, ${entry.region}, ${entry.country}` : ""}`);
@@ -1209,12 +1239,39 @@ async function captureTlsFingerprint(context) {
   }
 }
 
+// Camoufox may ignore a frozen navigator.userAgent and present its own build UA.
+// Persist what the browser actually reports so the stored fingerprint stops
+// disagreeing with both the JS layer and the TLS layer.
+async function alignFrozenUserAgent(page, fingerprint, fingerprintPath) {
+  try {
+    const actualUa = await page.evaluate(() => navigator.userAgent);
+    const frozenUa = fingerprint && fingerprint.navigator ? fingerprint.navigator.userAgent : null;
+    if (!actualUa || !fingerprint || !fingerprint.navigator || frozenUa === actualUa) {
+      return { changed: false, actualUa, frozenUa };
+    }
+    fingerprint.navigator.userAgent = actualUa;
+    try { fs.writeFileSync(fingerprintPath, JSON.stringify(fingerprint, null, 2), "utf-8"); } catch (e) { }
+    if (RISK) {
+      RISK.fingerprint.hash = computeFingerprintHash(fingerprint);
+      riskEvent("frozen_ua_aligned", { from: frozenUa, to: actualUa });
+    }
+    console.log(`[Fingerprint] Aligned frozen UA to the browser's actual UA and persisted it.`);
+    return { changed: true, actualUa, frozenUa };
+  } catch (e) {
+    return { changed: false, error: e.message };
+  }
+}
+
 async function safeGoto(page, url, options = { waitUntil: "domcontentloaded", timeout: 35000 }, maxRetries = 3) {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       return await page.goto(url, options);
     } catch (err) {
       console.warn(`[Navigation] Attempt ${attempt} failed for ${url}: ${err.message}`);
+      if (RISK && RISK.proxy && RISK.proxy.strict_sticky
+        && /502|bad gateway|proxy_connection_refused|proxy authentication|tunnel/i.test(err.message || "")) {
+        throw new Error("[Risk] Bound proxy session failed (502/proxy refused); aborting instead of rotating to a new IP.");
+      }
       if (attempt === maxRetries) throw err;
       await new Promise((r) => setTimeout(r, 2500 * attempt));
     }
@@ -1898,6 +1955,9 @@ async function run() {
     }
   })();
 
+  // Resolve the frozen UA vs the browser's real UA before any coherence probe.
+  await alignFrozenUserAgent(page, fingerprint, fingerprintPath);
+
   try {
     // 1. Verify Proxy Location, capture the per-step exit IP/ASN and audit
     // what the page actually exposes against the frozen persona.
@@ -1919,20 +1979,31 @@ async function run() {
     if (!tlsFingerprint) {
       riskWarn("TLS/JA3 capture failed; the browser TLS stack could not be verified (proxy blocked the probe or the endpoint is down).");
     }
+    // Compare the wire UA with what the page actually reports, not with the
+    // frozen fingerprint. The frozen UA is aligned to the browser above; if it
+    // still differs, that is a separate persistence bug worth its own warning.
+    const probe = coherenceAudit.probe || {};
+    const pageUa = probe.userAgent || null;
     const navUa = (fingerprint.navigator && fingerprint.navigator.userAgent) || null;
     let uaMatch = true;
+    if (pageUa && navUa && pageUa !== navUa) {
+      riskWarn("Frozen fingerprint UA still differs from the browser's navigator.userAgent after alignment.");
+    }
     if (tlsFingerprint) {
       console.log(`[Risk] TLS/JA3: ${tlsFingerprint.ja3_hash || "unknown"} | JA4: ${tlsFingerprint.ja4 || "unknown"}`);
-      if (navUa && tlsFingerprint.user_agent && tlsFingerprint.user_agent !== navUa) {
+      const wireUa = tlsFingerprint.user_agent || null;
+      if (wireUa && pageUa && wireUa !== pageUa) {
         uaMatch = false;
-        riskWarn("TLS user-agent differs from navigator.userAgent; the browser/HTTP stacks are inconsistent.");
+        riskWarn("TLS user-agent differs from the page's navigator.userAgent; the browser/HTTP stacks are inconsistent.");
+      } else if (wireUa && navUa && wireUa !== navUa) {
+        uaMatch = false;
+        riskWarn("TLS user-agent differs from the frozen fingerprint UA.");
       } else {
-        console.log(`[Risk] User-Agent parity: 100% Wire/DOM Match (${navUa})`);
+        console.log(`[Risk] User-Agent parity: 100% Wire/DOM Match (${pageUa || navUa})`);
       }
     }
 
     // Print Stealth & Anti-Detect Audit Dashboard
-    const probe = coherenceAudit.probe || {};
     printStealthAuditDashboard({
       exitIp: proxyLocation.ip,
       stickySessId: parsedProxyIdentity?.session || null,
@@ -1941,8 +2012,8 @@ async function run() {
       region: proxyLocation.region,
       country: proxyLocation.country,
       proxyConsistent: true,
-      navUa,
-      tlsUa: tlsFingerprint?.user_agent || navUa,
+      navUa: pageUa || navUa,
+      tlsUa: tlsFingerprint?.user_agent || pageUa || navUa,
       uaMatch,
       tls: tlsFingerprint,
       timezone: probe.timezone || persona.timezone || chosenTz,

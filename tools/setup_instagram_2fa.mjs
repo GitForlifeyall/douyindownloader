@@ -568,14 +568,14 @@ export async function setupInstagram2FA(page, emailTarget, cId, rToken) {
 
       // On Instagram web, clicking the gear icon opens a popup menu containing:
       // "Apps and websites", "QR code", "Notifications", "Settings and privacy", etc.
-      // We MUST click "Settings and privacy" to enter the settings page containing Accounts Center.
-      const settingsOption = page.locator("button:has-text('Settings and privacy'), [role='button']:has-text('Settings and privacy'), div:has-text('Settings and privacy'), a:has-text('Settings and privacy'), [aria-label*='Settings and privacy' i]").first();
+      // We click "Settings and privacy" (using specific button/role selectors) to enter the settings page.
+      const settingsOption = page.locator("div[role='dialog'] button:has-text('Settings and privacy'), button:has-text('Settings and privacy'), [role='button']:has-text('Settings and privacy'), a:has-text('Settings and privacy')").first();
       if ((await settingsOption.count()) > 0 && (await settingsOption.isVisible().catch(() => false))) {
         console.log("[Instagram 2FA] Step A.1: Clicking 'Settings and privacy' in options dropdown...");
         await settingsOption.hover().catch(() => {});
         await page.waitForTimeout(200);
         await settingsOption.click().catch(() => {});
-        await page.waitForTimeout(3500);
+        await page.waitForTimeout(3000);
       }
     }
 
