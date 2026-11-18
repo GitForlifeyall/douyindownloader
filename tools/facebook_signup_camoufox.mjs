@@ -1199,6 +1199,8 @@ async function selectFacebookGender(page, targetGender) {
   const isMatch = (txt) => {
     const s = (txt || "").trim();
     if (!s) return false;
+    // CRITICAL: Strictly reject Custom / Pronoun / Other
+    if (/custom|pronoun|कस्टम|કસ્ટમ|अन्य|બીજું/i.test(s)) return false;
     if (isFemale) {
       return /\bfemale\b|महिला|સ્ત્રી/i.test(s);
     } else {
@@ -1279,10 +1281,11 @@ async function selectFacebookGender(page, targetGender) {
       optionClicked = await page.evaluate((female) => {
         const match = (str) => {
           const s = (str || "").trim();
+          if (!s || /custom|pronoun|कस्टम|કસ્ટમ|अन्य|બીજું/i.test(s)) return false;
           if (female) return /\bfemale\b|महिला|સ્ત્રી/i.test(s);
           return (/\bmale\b/i.test(s) && !/\bfemale\b/i.test(s)) || /पुरुष|પુરુષ/i.test(s);
         };
-        const elements = Array.from(document.querySelectorAll("[role='option'], [role='menuitemradio'], [role='menuitem'], [role='listbox'] div, [role='listbox'] span, div[tabindex='-1'], div[tabindex='0'], span"));
+        const elements = Array.from(document.querySelectorAll("[role='option'], [role='menuitemradio'], [role='menuitem'], [role='listbox'] div[tabindex], [role='listbox'] li"));
         for (const el of elements) {
           const t = el.innerText || el.textContent || "";
           if (match(t)) {
@@ -1296,31 +1299,74 @@ async function selectFacebookGender(page, targetGender) {
 
     await page.waitForTimeout(400);
 
-    // Verification: check if the box text changed away from "Select your gender"
-    const currentBoxText = (await genderBox.innerText().catch(() => "")).trim();
-    const isStillUnselected = /select your gender|select/i.test(currentBoxText) || currentBoxText === "";
+    // Verification: check if the box text changed away from "Select your gender" AND is not "Custom"
+    let currentBoxText = (await genderBox.innerText().catch(() => "")).trim();
+    const isCustom = /custom|pronoun|कस्टम|કસ્ટમ/i.test(currentBoxText);
+    const isStillUnselected = /select your gender|select|चुनें|પસંદ/i.test(currentBoxText) || currentBoxText === "" || isCustom;
 
     if (isStillUnselected) {
-      console.warn(`[Facebook] Gender box still unselected ('${currentBoxText}'). Trying keyboard navigation fallback...`);
+      console.warn(`[Facebook] Gender box unselected or on Custom ('${currentBoxText}'). Using safe keyboard navigation fallback...`);
       await genderBox.focus().catch(() => { });
-      await genderBox.click().catch(() => { });
+      await humanClick(page, genderBox).catch(() => genderBox.click({ force: true }));
       await page.waitForTimeout(250);
-      if (isFemale) {
+      // Press Home key to reliably jump to the very first item (Female)
+      await page.keyboard.press("Home");
+      await page.waitForTimeout(100);
+      if (!isFemale) {
+        // For Male: step down exactly once from Female to Male
         await page.keyboard.press("ArrowDown");
         await page.waitForTimeout(100);
-        await page.keyboard.press("Enter");
-      } else {
-        await page.keyboard.press("ArrowDown");
-        await page.waitForTimeout(100);
-        await page.keyboard.press("ArrowDown");
-        await page.waitForTimeout(100);
-        await page.keyboard.press("Enter");
       }
+      await page.keyboard.press("Enter");
       await page.waitForTimeout(300);
-    } else {
-      console.log(`[Facebook] Successfully selected Gender: '${currentBoxText.replace(/\n/g, " - ")}'`);
-      return true;
     }
+
+    // Safeguard: Ensure Custom was NOT selected
+    currentBoxText = (await genderBox.innerText().catch(() => "")).trim();
+    if (/custom|pronoun|कस्टम|કસ્ટમ/i.test(currentBoxText)) {
+      console.warn(`[Facebook] ⚠️ Custom still detected ('${currentBoxText}')! Forcing direct click on Female/Male...`);
+      await humanClick(page, genderBox).catch(() => genderBox.click({ force: true }));
+      await page.waitForTimeout(250);
+      await page.evaluate((female) => {
+        const items = Array.from(document.querySelectorAll("[role='option'], [role='menuitemradio'], [role='menuitem'], [role='listbox'] div[tabindex], [role='listbox'] li"));
+        const validItems = items.filter(el => {
+          const t = (el.innerText || el.textContent || "").toLowerCase();
+          return !t.includes("custom") && !t.includes("pronoun");
+        });
+        if (female && validItems[0]) {
+          validItems[0].click();
+        } else if (!female && validItems[1]) {
+          validItems[1].click();
+        } else if (validItems[0]) {
+          validItems[0].click();
+        }
+      }, isFemale);
+      await page.waitForTimeout(300);
+    }
+
+    currentBoxText = (await genderBox.innerText().catch(() => "")).trim();
+    console.log(`[Facebook] Successfully selected Gender: '${currentBoxText.replace(/\n/g, " - ")}'`);
+
+    // Clean up if pronoun fields were rendered
+    const hasPronounField = await page.evaluate(() => {
+      const text = (document.body && document.body.innerText) || "";
+      return text.includes("Select your pronoun") || text.includes("Please select your pronoun") || Boolean(document.querySelector("input[name='custom_gender']"));
+    });
+    if (hasPronounField) {
+      console.warn("[Facebook] ⚠️ 'Select your pronoun' field detected! Re-clicking gender box to enforce Female/Male...");
+      await humanClick(page, genderBox).catch(() => genderBox.click({ force: true }));
+      await page.waitForTimeout(250);
+      await page.keyboard.press("Home");
+      await page.waitForTimeout(100);
+      if (!isFemale) {
+        await page.keyboard.press("ArrowDown");
+        await page.waitForTimeout(100);
+      }
+      await page.keyboard.press("Enter");
+      await page.waitForTimeout(300);
+    }
+
+    return true;
   }
 
   // Check 3: Radio buttons (alternate A/B testing form layouts)
@@ -1341,6 +1387,116 @@ async function selectFacebookGender(page, targetGender) {
   }
 
   return false;
+}
+
+// ----------------------------------------------------
+// Robust Facebook Email Input Filler
+// Handles scrolled/downward email layouts, label proximity,
+// and eliminates misdirected input into custom gender boxes.
+// ----------------------------------------------------
+async function fillFacebookEmail(page, email) {
+  console.log(`[Facebook] Locating and entering Email (${email})...`);
+
+  // Ensure any lingering custom gender input value is wiped if it was mistakenly set
+  await page.evaluate(() => {
+    const customInput = document.querySelector("input[name='custom_gender']");
+    if (customInput) customInput.value = "";
+  }).catch(() => { });
+
+  // Scroll down smoothly so the contact inputs are well inside the viewport
+  await page.evaluate(() => {
+    window.scrollBy(0, 250);
+  }).catch(() => { });
+  await page.waitForTimeout(300);
+
+  const emailCandidateSelectors = [
+    "input[name='reg_email__']",
+    "input[aria-label*='Mobile number or email' i]",
+    "input[placeholder*='Mobile number or email' i]",
+    "input[aria-label*='Mobile' i]",
+    "input[placeholder*='Mobile' i]",
+    "input[aria-label*='email' i]",
+    "input[placeholder*='email' i]",
+    "input[type='email']",
+    "input[autocomplete='email']",
+    "input[autocomplete='username']",
+    "label:has-text('Mobile number or email') input",
+    "div:has(> label:has-text('Mobile number or email')) input",
+    "div:has-text('Mobile number or email address') input:not([type='password'])",
+    "div:has-text('Mobile number or email') input:not([type='password'])"
+  ];
+
+  let emInput = null;
+  for (const sel of emailCandidateSelectors) {
+    const loc = page.locator(sel).first();
+    if ((await loc.count()) > 0) {
+      // Exclude custom gender, pronoun, firstname, lastname
+      const name = ((await loc.getAttribute("name").catch(() => "")) || "").toLowerCase();
+      const aria = ((await loc.getAttribute("aria-label").catch(() => "")) || "").toLowerCase();
+      const placeholder = ((await loc.getAttribute("placeholder").catch(() => "")) || "").toLowerCase();
+      if (/custom_gender|pronoun|firstname|lastname/i.test(name + aria + placeholder)) {
+        continue;
+      }
+      emInput = loc;
+      break;
+    }
+  }
+
+  // DOM scan fallback: search through inputs to match the Mobile number or email address container
+  if (!emInput) {
+    console.log("[Facebook] Searching DOM for Mobile number or email address input...");
+    const handle = await page.evaluateHandle(() => {
+      const inputs = Array.from(document.querySelectorAll("input:not([type='password']):not([type='hidden']):not([type='radio']):not([type='checkbox'])"));
+      for (const input of inputs) {
+        const name = (input.name || "").toLowerCase();
+        if (name === "firstname" || name === "lastname" || name.includes("custom_gender") || name.includes("pronoun")) continue;
+        const aria = (input.getAttribute("aria-label") || "").toLowerCase();
+        const placeholder = (input.placeholder || "").toLowerCase();
+        if (name === "reg_email__" || input.type === "email" || aria.includes("mobile") || aria.includes("email") || placeholder.includes("mobile") || placeholder.includes("email")) {
+          return input;
+        }
+        const container = input.closest("div, label");
+        if (container) {
+          const txt = (container.innerText || "").toLowerCase();
+          if ((txt.includes("mobile") || txt.includes("email")) && !txt.includes("re-enter") && !txt.includes("confirm")) {
+            return input;
+          }
+        }
+      }
+      return null;
+    });
+
+    if (handle && handle.asElement()) {
+      emInput = handle.asElement();
+    }
+  }
+
+  if (emInput) {
+    await emInput.scrollIntoViewIfNeeded().catch(() => { });
+    await page.waitForTimeout(200);
+    if (typeof emInput.click === "function") {
+      await humanClick(page, emInput).catch(() => emInput.click({ force: true }));
+    }
+    await humanType(page, emInput, email);
+    console.log(`[Facebook] Entered Email: ${email}`);
+  } else {
+    console.warn("[Facebook] Waiting for email input to become visible...");
+    const fallback = page.locator("input[name='reg_email__']:visible, input[aria-label*='Mobile' i]:visible, input[placeholder*='Mobile' i]:visible, input[type='email']:visible").first();
+    await fallback.waitFor({ state: "visible", timeout: 8000 }).catch(() => { });
+    if (await fallback.isVisible().catch(() => false)) {
+      await fallback.scrollIntoViewIfNeeded().catch(() => { });
+      await humanType(page, fallback, email);
+    }
+  }
+
+  // Verify and re-enter email confirmation if required
+  await page.waitForTimeout(600);
+  const reEmInput = page.locator("input[name='reg_email_confirmation__']:visible, input[aria-label*='Re-enter' i]:visible, input[placeholder*='Re-enter' i]:visible").first();
+  if ((await reEmInput.count()) > 0 && (await reEmInput.isVisible().catch(() => false))) {
+    console.log("[Facebook] Re-entering email confirmation...");
+    await reEmInput.scrollIntoViewIfNeeded().catch(() => { });
+    await humanType(page, reEmInput, email);
+  }
 }
 
 async function fillBirthdayAndGender(page, dobObj, targetGender) {
@@ -2445,48 +2601,40 @@ async function run() {
       // 2. Select Date of Birth & Gender dynamically
       await fillBirthdayAndGender(page, dobObj, randomGender);
 
-      // 3. Fill Mobile number or email address
-      console.log(`[Facebook] Entering Email: ${email}...`);
-      let emInput = page.locator("input[name='reg_email__']:visible, input[aria-label*='Mobile number or email' i]:visible, input[placeholder*='Mobile number or email' i]:visible").first();
-      if ((await emInput.count()) === 0 || !(await emInput.isVisible().catch(() => false))) {
-        emInput = page.locator("input[type='text']:visible").nth(2);
-      }
-      if ((await emInput.count()) > 0 && (await emInput.isVisible().catch(() => false))) {
-        await humanType(page, emInput, email);
-      } else {
-        await emInput.waitFor({ state: "visible", timeout: 8000 }).catch(() => { });
-        if (await emInput.isVisible().catch(() => false)) {
-          await humanType(page, emInput, email);
-        }
-      }
-
-      // Re-enter email confirmation if required
-      await page.waitForTimeout(600);
-      const reEmInput = page.locator("input[name='reg_email_confirmation__']:visible, input[aria-label*='Re-enter' i]:visible, input[placeholder*='Re-enter' i]:visible").first();
-      if ((await reEmInput.count()) > 0 && (await reEmInput.isVisible().catch(() => false))) {
-        await humanType(page, reEmInput, email);
-      }
+      // 3. Fill Mobile number or email address (handles downward-scrolled form layouts)
+      await fillFacebookEmail(page, email);
 
       // 4. Fill Password
       console.log(`[Facebook] Entering Password (masked)...`);
-      let pwInput = page.locator("input[name='reg_passwd__']:visible, input[type='password']:visible").first();
-      if ((await pwInput.count()) > 0 && (await pwInput.isVisible().catch(() => false))) {
+      let pwInput = page.locator("input[name='reg_passwd__'], input[type='password']").first();
+      if ((await pwInput.count()) > 0) {
+        await pwInput.scrollIntoViewIfNeeded().catch(() => { });
         await humanType(page, pwInput, password);
       } else {
         await pwInput.waitFor({ state: "visible", timeout: 8000 }).catch(() => { });
         if (await pwInput.isVisible().catch(() => false)) {
+          await pwInput.scrollIntoViewIfNeeded().catch(() => { });
           await humanType(page, pwInput, password);
         }
       }
 
-      // 5. Pre-submit Validation: Ensure Gender is actually selected
-      const genderNeedsFix = await page.evaluate(() => {
+      // 5. Pre-submit Validation: Ensure Gender is Female/Male (NEVER Custom) and Email is entered
+      const formValidation = await page.evaluate(() => {
         const bodyTxt = (document.body && document.body.innerText) || "";
-        return bodyTxt.includes("Please choose a gender") || bodyTxt.includes("Select your gender") || bodyTxt.includes("कृपया एक लिंग चुनें");
+        const genderBad = bodyTxt.includes("Please choose a gender") || bodyTxt.includes("Select your gender") || bodyTxt.includes("Select your pronoun") || bodyTxt.includes("Please select your pronoun") || bodyTxt.includes("कृपया एक लिंग चुनें");
+        const emailBad = bodyTxt.includes("Please enter a valid mobile number or email address") || bodyTxt.includes("कृपया एक मान्य मोबाइल नंबर");
+        return { genderBad, emailBad };
       });
-      if (genderNeedsFix) {
-        console.warn("[Facebook] Gender still unselected or validation warning visible before submit. Re-running selectFacebookGender...");
+
+      if (formValidation.genderBad) {
+        console.warn("[Facebook] Gender still unselected, Custom selected, or warning visible before submit. Re-running selectFacebookGender...");
         await selectFacebookGender(page, randomGender);
+        await page.waitForTimeout(600);
+      }
+
+      if (formValidation.emailBad) {
+        console.warn("[Facebook] Email field missing or invalid error shown before submit. Re-running fillFacebookEmail...");
+        await fillFacebookEmail(page, email);
         await page.waitForTimeout(600);
       }
 
