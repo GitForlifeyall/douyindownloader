@@ -270,6 +270,9 @@ def register_metricool_account(
                 page.goto(link, wait_until="domcontentloaded", timeout=timeout)
                 page.wait_for_timeout(4000)
 
+            # Handle Onboarding Dialogs if present
+            handle_playwright_onboarding(page)
+
             # Final status check
             final_url = page.url
             page_title = page.title()
@@ -290,6 +293,107 @@ def register_metricool_account(
     # Save to disk
     save_registered_account(result)
     return result
+
+
+def handle_playwright_onboarding(page, max_wait_seconds: int = 30):
+    """
+    Automates traversal and dismissal of all Metricool onboarding dialogs:
+    1. Dialog 1: "What describes you best?" -> 'Marketing agency' + 'Just me' -> 'Continue'.
+    2. Dialog 2: "How are you going to use Metricool?" -> 'Programming and publishing of content' -> 'Continue'.
+    3. Dialog 3: "Connect your social networks" -> 'Finish'.
+    4. Dialog 4: "Wait! Are you sure you want to leave?" -> 'Accept'.
+    5. Dismisses any remaining tour/welcome/cookie dialogs.
+    """
+    logger.info("Checking for Metricool onboarding survey dialogs (Playwright)...")
+    start_time = time.time()
+    page.wait_for_timeout(3000)
+
+    while time.time() - start_time < max_wait_seconds:
+        content = page.content()
+
+        # Dialog 1: "What describes you best?"
+        if "What describes you best?" in content:
+            logger.info("[Onboarding] Dialog 1 detected: 'What describes you best?'")
+            for role in ["Marketing agency", "Content creator, personal brand or influencer"]:
+                loc = page.locator(f"text='{role}'").first
+                if loc.count() > 0 and loc.is_visible():
+                    logger.info(f"[Onboarding] Selecting role: '{role}'")
+                    loc.click(force=True)
+                    page.wait_for_timeout(400)
+                    break
+
+            for team in ["Just me", "I will work with more colleagues"]:
+                loc = page.locator(f"text='{team}'").first
+                if loc.count() > 0 and loc.is_visible():
+                    logger.info(f"[Onboarding] Selecting team: '{team}'")
+                    loc.click(force=True)
+                    page.wait_for_timeout(400)
+                    break
+
+            cont_btn = page.locator("button:has-text('Continue')").first
+            if cont_btn.count() > 0 and cont_btn.is_visible():
+                logger.info("[Onboarding] Clicking Continue on Dialog 1...")
+                cont_btn.click(force=True)
+                page.wait_for_timeout(3000)
+            continue
+
+        # Dialog 2: "How are you going to use Metricool?"
+        if "How are you going to use Metricool?" in content:
+            logger.info("[Onboarding] Dialog 2 detected: 'How are you going to use Metricool?'")
+            prog = page.locator("text='Programming and publishing of content'").first
+            if prog.count() > 0 and prog.is_visible():
+                logger.info("[Onboarding] Selecting 'Programming and publishing of content'")
+                prog.click(force=True)
+                page.wait_for_timeout(400)
+
+            cont2 = page.locator("button:has-text('Continue')").last
+            if cont2.count() > 0 and cont2.is_visible():
+                logger.info("[Onboarding] Clicking Continue on Dialog 2...")
+                cont2.click(force=True)
+                page.wait_for_timeout(3000)
+            continue
+
+        # Dialog 3: "Connect your social networks"
+        if "Connect your social networks" in content:
+            logger.info("[Onboarding] Dialog 3 detected: 'Connect your social networks'")
+            finish_btn = page.locator("button:has-text('Finish')").last
+            if finish_btn.count() > 0 and finish_btn.is_visible():
+                logger.info("[Onboarding] Clicking Finish on Dialog 3...")
+                finish_btn.click(force=True)
+                page.wait_for_timeout(3000)
+            continue
+
+        # Dialog 4: Confirmation "Wait! Are you sure you want to leave?"
+        if "Wait! Are you sure you want to leave?" in content:
+            logger.info("[Onboarding] Dialog 4 detected: confirmation prompt")
+            accept_btn = page.locator("button:has-text('Accept')").first
+            if accept_btn.count() > 0 and accept_btn.is_visible():
+                logger.info("[Onboarding] Clicking Accept on confirmation dialog...")
+                accept_btn.click(force=True)
+                page.wait_for_timeout(3000)
+            continue
+
+        # Check for tour modals
+        tour_dismissed = False
+        for text in ["Skip tour", "Skip", "Got it", "Understood", "Close"]:
+            btn = page.locator(f"button:has-text('{text}')").first
+            if btn.count() > 0 and btn.is_visible():
+                logger.info(f"[Onboarding] Dismissing modal with '{text}' button")
+                btn.click(force=True)
+                page.wait_for_timeout(1000)
+                tour_dismissed = True
+                break
+
+        if tour_dismissed:
+            continue
+
+        # Check active overlays
+        active_overlays = page.locator(".v-overlay--active .v-dialog")
+        if active_overlays.count() == 0:
+            logger.info("[Onboarding] All onboarding dialogs dismissed.")
+            break
+
+        page.wait_for_timeout(1500)
 
 
 def save_registered_account(account_record: Dict[str, Any]):

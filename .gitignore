@@ -26,4 +26,5 @@ profiles metricool/
 *metricool*.json
 *exhausted*keys*.json
 tests/test_artifacts/
+.claude/
 

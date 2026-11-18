@@ -1,11 +1,60 @@
 {
   "version": 2,
   "skills": {
+    "anti-detect-browser": {
+      "source": "antibrow/anti-detect-browser-skills",
+      "commit": "b800e3a54d8d4f93ae5ee23c59d13b43df5d4462",
+      "sourceType": "github",
+      "skillPath": "anti-detect-browser/SKILL.md",
+      "computedHash": "05a4b554bdcaf8714d211f5e1ee2621ffb1737299e7df88e572f501001b91fc1"
+    },
+    "browser-fingerprint-audit": {
+      "source": "liarjsdev/liarjs-skills",
+      "commit": "4068c79209753c74f895a4a5a6d117fcde8d94d1",
+      "sourceType": "github",
+      "skillPath": "skills/browser-fingerprint-audit/SKILL.md",
+      "computedHash": "6291f135d1e2e9fe9efbc47d7ab82df90c7bc3b01f27cbbc759490ffb721c194"
+    },
+    "camofox-browser": {
+      "source": "yelban/camofox-browser-skills",
+      "commit": "ce92722dab83ebf7bf8b5fd9d463531c7103a2a5",
+      "sourceType": "github",
+      "skillPath": "camofox-browser/SKILL.md",
+      "computedHash": "bf635900b24932260e25a33028796985c417c31eac9cd356c8ada192aa071e64"
+    },
     "camoufox-cli": {
       "source": "Bin-Huang/camoufox-cli",
       "sourceType": "github",
       "skillPath": "skills/camoufox-cli/SKILL.md",
       "computedHash": "afa3e024c38fdf68735250e5ce64db907490b8f4cc54834713230e0f1da03ac5"
+    },
+    "fingerprint-ci-gate": {
+      "source": "liarjsdev/liarjs-skills",
+      "commit": "4068c79209753c74f895a4a5a6d117fcde8d94d1",
+      "sourceType": "github",
+      "skillPath": "skills/fingerprint-ci-gate/SKILL.md",
+      "computedHash": "d2b6ebb4d8180541a971986448b2ad75df334298a320908e144a69be8bc6f0ef"
+    },
+    "fingerprint-failure-triage": {
+      "source": "liarjsdev/liarjs-skills",
+      "commit": "4068c79209753c74f895a4a5a6d117fcde8d94d1",
+      "sourceType": "github",
+      "skillPath": "skills/fingerprint-failure-triage/SKILL.md",
+      "computedHash": "ca91b8f136fc8ae8d6177092e8013795c8c84729d2496b8b00a4790664b22557"
+    },
+    "multi-account-isolation": {
+      "source": "antibrow/anti-detect-browser-skills",
+      "commit": "b800e3a54d8d4f93ae5ee23c59d13b43df5d4462",
+      "sourceType": "github",
+      "skillPath": "multi-account-isolation/SKILL.md",
+      "computedHash": "b97d1df30750b9f7d846f65fcb6a6e22b6f0a43be91a3bd419196885ca046c0e"
+    },
+    "playwright-stealth-verify": {
+      "source": "liarjsdev/liarjs-skills",
+      "commit": "4068c79209753c74f895a4a5a6d117fcde8d94d1",
+      "sourceType": "github",
+      "skillPath": "skills/playwright-stealth-verify/SKILL.md",
+      "computedHash": "794f047636228a758e0aada415c693c59a795dbabc3e452ad3fabca1916866b0"
     }
   }
 }
