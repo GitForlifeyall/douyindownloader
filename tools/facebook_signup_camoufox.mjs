@@ -1319,7 +1319,16 @@ async function handleOtpChallenge(page, targetEmail, cId, rToken, sessionStartTi
     console.log("[Facebook] OTP submitted. Waiting 10s for confirmation...");
     await page.waitForTimeout(10000);
     riskMark("otp_submitted");
-    console.log(`[Facebook] Current URL: ${page.url()} | Title: '${await page.title()}'`);
+    const postOtpUrl = page.url() || "";
+    console.log(`[Facebook] Current URL: ${postOtpUrl} | Title: '${await page.title()}'`);
+
+    // Strictly check for checkpoint/* after putting OTP
+    if (postOtpUrl.includes("checkpoint/") || postOtpUrl.includes("/checkpoint/")) {
+      console.error("=".repeat(65));
+      console.error(`[Facebook] ⚠️ ACCOUNT CHECKPOINT / SUSPENDED: Redirected to ${postOtpUrl}`);
+      console.error("=".repeat(65));
+      return { success: false, otp, thread, suspended: true, url: postOtpUrl };
+    }
 
     const postOtpSusp = await isFacebookSuspendedScreen(page);
     if (postOtpSusp.isSuspended) {
@@ -2190,14 +2199,17 @@ async function run() {
     // 6.5 Handle Post-Registration Modals ("Save info", "Not Now", etc.)
     await handlePostSignupModals(page, 15000);
 
+    const curPostOtpUrl = page.url() || "";
+    const isPostOtpCheckpoint = curPostOtpUrl.includes("checkpoint/") || curPostOtpUrl.includes("/checkpoint/");
     const postModalSusp = await isFacebookSuspendedScreen(page);
-    if (postModalSusp.isSuspended) {
+    if (isPostOtpCheckpoint || postModalSusp.isSuspended) {
+      const suspUrl = isPostOtpCheckpoint ? curPostOtpUrl : postModalSusp.url;
       console.error("=".repeat(65));
-      console.error(`[Facebook] ⚠️ ACCOUNT SUSPENDED: Facebook redirected to ${postModalSusp.url}`);
+      console.error(`[Facebook] ⚠️ ACCOUNT SUSPENDED: Facebook redirected to ${suspUrl}`);
       console.error("=".repeat(65));
       await page.screenshot({ path: path.join(profileDir, "suspension_screen.png"), fullPage: true }).catch(() => {});
       await page.screenshot({ path: "tests/test_artifacts/fb_latest_live.png", fullPage: true }).catch(() => {});
-      markFacebookAccountSuspended(email, postModalSusp.url, profileDir);
+      markFacebookAccountSuspended(email, suspUrl, profileDir);
       saveRegisteredAccount({
         email,
         password,
@@ -2221,7 +2233,7 @@ async function run() {
         status: "SUSPENDED",
         is_suspended: true,
         suspended_at: new Date().toISOString(),
-        suspension_url: postModalSusp.url,
+        suspension_url: suspUrl,
       });
       console.log("[Facebook] Automation strictly ABORTED due to account suspension.");
       console.log("[Facebook] >>> SESSION IS LIVE ON YOUR SCREEN <<<");

@@ -7,6 +7,16 @@ This document logs all architectural decisions, code changes, pipeline updates, 
 
 ## Session History & Major Changes
 
+### [2026-11-18] Facebook Post-OTP Checkpoint/* Suspension Check Hardening
+1. **Instruction & Optimization**:
+   - The user instructed to specifically check for `checkpoint/*` right after submitting the OTP in Facebook.
+   - Any redirect to `checkpoint/*` following OTP submission indicates that Facebook has placed the account in a security/suspension checkpoint.
+2. **Resolution**:
+   - In [`tools/facebook_signup_camoufox.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/facebook_signup_camoufox.mjs), updated `handleOtpChallenge` and the post-OTP flow:
+     - Immediately checks `postOtpUrl.includes("checkpoint/") || postOtpUrl.includes("/checkpoint/")` right after OTP submission and the 10-second confirmation pause.
+     - Also checks following modal dismissals.
+     - If triggered, immediately marks `status: "SUSPENDED"`, `is_suspended: true`, `suspension_url: postOtpUrl`, saves full-page screenshot `suspension_screen.png`, and cleanly aborts onboarding and Page creation.
+
 ### [2026-11-18] Profile Aging Engine: Bookmarks Toolbar, Browsing History & UI Realism Seeding
 1. **Background & Objective**:
    - Fresh automated browser profiles lack bookmarks, history, and cache, making them visually bare during manual reviews and vulnerable to browser fingerprint aging heuristics.
