@@ -7,6 +7,15 @@ This document logs all architectural decisions, code changes, pipeline updates, 
 
 ## Session History & Major Changes
 
+### [2026-11-18] Verification of DeepSeek Handoff & Facebook Pipeline Synchronization
+1. **Verification of DeepSeek Findings**:
+   - Reviewed `handoffs/deepseek_handoff.md` (`UA/session parser/proxy fail-closed fixes`).
+   - Ran [`tests/test_artifacts/parse_proxy_check.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tests/test_artifacts/parse_proxy_check.mjs): all 4 test vectors (`sessid_oneip`, `sessid`, legacy `sess`, and ISP static port 8001) verified and passing 100%.
+   - Verified fail-closed logic: `safeGoto` 502/bad gateway abort and `captureExitIp` strict-sticky IP-change abort in [`tools/instagram_signup_camoufox.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/instagram_signup_camoufox.mjs).
+2. **Synchronization with Facebook Pipeline**:
+   - Ported the identical Oxylabs static port recognition (`port >= 8001`), fail-closed 502 abort in `safeGoto`, and strict-sticky mid-run IP change abort in `captureExitIp` to [`tools/facebook_signup_camoufox.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/facebook_signup_camoufox.mjs).
+   - Validated test suite across both scripts. Syntax check passed with code 0 across all tools.
+
 ### [2026-11-18] Oxylabs Sticky Proxy Session Syntax Alignment & Options Dialog Selector Hardening
 1. **Root Cause**:
    - `parseProxyIdentity` in both `instagram_signup_camoufox.mjs` and `facebook_signup_camoufox.mjs` previously looked only for `-sessid-` or `-session-`, failing to parse Oxylabs `-sessid_oneip-` and `-sesstime-` parameters or entry ports (10001-49999). This caused false "no sticky-session id" warnings even when stickiness was active.

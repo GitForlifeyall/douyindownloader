@@ -404,3 +404,39 @@ summary or handoff.
 - No live signup/2FA was run in this pass; verification was the throwaway-profile
   harness plus `node --check` of the harness.
 
+### [2026-11-18] UA/session parser/proxy fail-closed fixes
+
+Applied the three follow-ups requested after the QA review. No new handoff file was
+created: `AGENTS.md` assigns this agent (DeepSeek/OpenCode in this repository) to
+`handoffs/deepseek_handoff.md`, so work is appended here rather than to a new file.
+Only `tools/instagram_signup_camoufox.mjs` was changed in production code; a scratch
+test was added under `tests/test_artifacts/`. No credential values appear here.
+
+**`tools/instagram_signup_camoufox.mjs`**
+- `parseProxyIdentity()` rewritten. It now recognises Oxylabs' real sticky syntax:
+  `sessid-<id>`, `sessid_oneip-<id>`, legacy `sess-`/`session-`, optional
+  `-sesstime-<minutes>`, and static entry ports ( residential 10001-49999,
+  DC/ISP 8001+ ). New fields: `session_type`, `session_minutes`, `sticky_port`,
+  `strict_sticky`. The session-id regex excludes `-` so `sesstime-30` is not
+  absorbed into the id. This removes the false "no sticky-session id" warning.
+- `ensureStickyProxy()` now generates `-sessid_oneip-<id>-sesstime-30` instead of
+  plain `sessid`, so auto-created per-account sessions fail closed on IP loss.
+- `captureExitIp()` now **throws** when the exit IP changes mid-run and
+  `RISK.proxy.strict_sticky` is true (sessid_oneip / static port). Previously it
+  only warned, allowing the flow to continue on a different exit.
+- `safeGoto()` now aborts immediately on `502 / bad gateway / proxy_connection_refused`
+  errors when strict sticky is active, instead of retrying into a rotated IP.
+- Added `alignFrozenUserAgent(page, fingerprint, fingerprintPath)`: the frozen
+  `fingerprint.json` UA is replaced with the UA the browser actually reports,
+  persisted, and `RISK.fingerprint.hash` is recomputed. Called before preflight.
+- TLS/UA comparison now checks the wire UA against the **page** UA from the
+  coherence probe (not the frozen fingerprint), with a separate warning if the
+  frozen UA still differs. The stealth dashboard also uses the page UA.
+
+**Verification**
+- `node --check tools/instagram_signup_camoufox.mjs` passes.
+- `tests/test_artifacts/parse_proxy_check.mjs`: 4/4 cases pass
+  (`sessid_oneip`, `sessid`, legacy `sess`, ISP static port 8001), including
+  country/state and session-minutes extraction.
+- No live signup or 2FA was run after these edits.
+

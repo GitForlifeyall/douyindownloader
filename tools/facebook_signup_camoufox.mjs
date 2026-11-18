@@ -160,10 +160,11 @@ function parseProxyIdentity(proxyStr) {
   const session = sessionMatch ? sessionMatch[2] : null;
   const sessionTimeMatch = username.match(/-sesstime-(\d+)/i);
 
-  // Static/sticky entry ports (10001-49999) are another Oxylabs stickiness mode.
+  // Oxylabs static ports: residential sticky ports are 10001-49999; DC/ISP
+  // static IPs start at 8001 (8000 is the rotating backconnect port).
   const portMatch = host.match(/:(\d+)$/);
   const port = portMatch ? Number(portMatch[1]) : null;
-  const stickyPort = port != null && port >= 10001 && port <= 49999 ? port : null;
+  const stickyPort = port != null && (port >= 8001) ? port : null;
 
   const countryMatch = username.match(/-cc-([a-z]{2})(?:[-_]|$)/i);
   const stateMatch = username.match(/-st-([a-z_]+)(?:[-_]|$)/i);
@@ -327,7 +328,11 @@ async function captureExitIp(page, step = "unspecified") {
     const knownIps = RISK.exit_ips.map((x) => x.ip).filter(Boolean);
     const firstIp = knownIps[0];
     if (entry.ip && firstIp && entry.ip !== firstIp) {
-      riskWarn(`CRITICAL: Exit IP changed mid-run: ${firstIp} -> ${entry.ip}`);
+      const message = `CRITICAL: Exit IP changed mid-run: ${firstIp} -> ${entry.ip} (@${step}).`;
+      riskWarn(message);
+      if (RISK.proxy && RISK.proxy.strict_sticky) {
+        throw new Error(`[Risk] Bound proxy session changed exit IP (${firstIp} -> ${entry.ip}) at ${step}. Aborting.`);
+      }
     }
   }
   console.log(`[Risk] Exit IP @ ${step}: ${entry.ip || "unknown"}${entry.asn ? ` | ASN ${entry.asn}` : ""}${entry.city ? ` | ${entry.city}, ${entry.region}, ${entry.country}` : ""}`);
@@ -625,6 +630,10 @@ async function safeGoto(page, url, options = { waitUntil: "domcontentloaded", ti
       return await page.goto(url, options);
     } catch (err) {
       console.warn(`[Navigation] Attempt ${attempt} failed for ${url}: ${err.message}`);
+      if (RISK && RISK.proxy && RISK.proxy.strict_sticky
+        && /502|bad gateway|proxy_connection_refused|proxy authentication|tunnel/i.test(err.message || "")) {
+        throw new Error("[Risk] Bound proxy session failed (502/proxy refused); aborting instead of rotating to a new IP.");
+      }
       if (attempt === maxRetries) throw err;
       await new Promise((r) => setTimeout(r, 2000 * attempt));
     }
