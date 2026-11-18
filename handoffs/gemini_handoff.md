@@ -7,6 +7,19 @@ This document logs all architectural decisions, code changes, pipeline updates, 
 
 ## Session History & Major Changes
 
+### [2026-11-18] Facebook Registration Form Auto-Refresh & Anti-Timeout Loop
+1. **Instruction & Issue**:
+   - The user reported: `locator.waitFor: Timeout 15000ms exceeded waiting for locator('input[type=\'text\']:visible').first() to be visible` while typing name on registration landing.
+   - User instruction: *"instead of timeing out try refreshing"*.
+2. **Resolution**:
+   - In [`tools/facebook_signup_camoufox.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/facebook_signup_camoufox.mjs):
+     - Replaced brittle single-shot `fnInput.waitFor({ timeout: 15000 })` with an auto-refresh retry loop (up to 4 attempts).
+     - If the registration form inputs are not visible, instead of timing out and crashing, the script:
+       - Clicks "Create new account" if the button is sitting on the landing page.
+       - Alternates between reloading the page (`page.reload()`) and re-navigating to `/reg/?entry_point=login&locale=en_US`.
+     - Wrapped all field wait calls (`lnInput`, `emInput`, `pwInput`, and Page creation `nameInput`) with non-fatal fallbacks.
+
+
 ### [2026-11-18] Facebook OTP 35-Second Resend Trigger & Outlook Terminal Prompt Elimination
 1. **Instruction**:
    - "if otp doesnt come under 35 secs then resend otp. donot ask me for it for outlook"

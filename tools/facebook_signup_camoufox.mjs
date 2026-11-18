@@ -1555,9 +1555,11 @@ async function createFacebookPage(page, customPageName = null, customBio = null)
 
   // 1. Fill Page Name
   console.log(`[Facebook] Entering Page Name: "${pageName}"...`);
-  const nameInput = page.locator("input[aria-label*='Page name' i], label:has-text('Page name') input").first();
-  await nameInput.waitFor({ state: "visible", timeout: 15000 });
-  await humanType(page, nameInput, pageName, { typos: false });
+  const nameInput = page.locator("input[aria-label*='Page name' i], label:has-text('Page name') input, input[type='text']:visible").first();
+  await nameInput.waitFor({ state: "visible", timeout: 15000 }).catch(() => { });
+  if ((await nameInput.count()) > 0 && (await nameInput.isVisible().catch(() => false))) {
+    await humanType(page, nameInput, pageName, { typos: false });
+  }
   await page.waitForTimeout(800);
 
   // 2. Fill Category: Personal blog
@@ -2173,25 +2175,77 @@ async function run() {
         await page.waitForTimeout(2500);
       }
 
-      // Wait for registration input fields to be visible
-      console.log("[Facebook] Waiting for registration input fields to become visible...");
-      await page.waitForSelector("input[type='text']:visible, input[name='firstname']:visible", { timeout: 20000 }).catch(() => { });
+      // Wait for registration input fields to be visible with auto-refresh retry
+      console.log("[Facebook] Waiting for registration input fields to become visible (with auto-refresh retry)...");
+      let fnInput = null;
+      const maxFormLoadAttempts = 4;
+
+      for (let attempt = 1; attempt <= maxFormLoadAttempts; attempt++) {
+        const susp = await isFacebookSuspendedScreen(page);
+        if (susp.isSuspended) break;
+
+        const candidate = page.locator("input[name='firstname']:visible, input[aria-label*='First name' i]:visible, input[placeholder*='First name' i]:visible, input[type='text']:visible").first();
+        if ((await candidate.count()) > 0 && (await candidate.isVisible().catch(() => false))) {
+          fnInput = candidate;
+          console.log(`[Facebook] Registration inputs ready on attempt ${attempt}.`);
+          break;
+        }
+
+        // Check if "Create new account" button is sitting on landing page
+        const createBtn = page.locator("a[data-testid='open-registration-form-button'], a[role='button']:has-text('Create new account'), button:has-text('Create new account'), [role='button']:has-text('नया अकाउंट बनाएँ')").first();
+        if ((await createBtn.count()) > 0 && (await createBtn.isVisible().catch(() => false))) {
+          console.log("[Facebook] Found 'Create new account' button on page. Clicking to open registration form...");
+          await humanClick(page, createBtn).catch(() => createBtn.click());
+          await page.waitForTimeout(3000);
+          continue;
+        }
+
+        // Instead of timing out, try refreshing per user instruction
+        console.warn(`[Facebook] Registration inputs not yet visible (Attempt ${attempt}/${maxFormLoadAttempts}). Refreshing instead of timing out...`);
+        try {
+          if (attempt % 2 === 1) {
+            console.log("[Facebook] Reloading current page...");
+            await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
+          } else {
+            console.log("[Facebook] Re-navigating to /reg/?entry_point=login&locale=en_US...");
+            await safeGoto(page, "https://www.facebook.com/reg/?entry_point=login&locale=en_US", { waitUntil: "domcontentloaded", timeout: 35000 });
+          }
+          await page.waitForTimeout(3500);
+        } catch (reloadErr) {
+          console.warn(`[Facebook Refresh Note]: ${reloadErr.message}`);
+        }
+      }
 
       // 1. Fill First Name & Surname
       console.log(`[Facebook] Typing Name: ${firstName} ${lastName}...`);
-      let fnInput = page.locator("input[name='firstname']:visible, input[aria-label*='First name' i]:visible, input[placeholder*='First name' i]:visible").first();
-      if ((await fnInput.count()) === 0 || !(await fnInput.isVisible().catch(() => false))) {
-        fnInput = page.locator("input[type='text']:visible").nth(0);
+      if (!fnInput || !(await fnInput.isVisible().catch(() => false))) {
+        fnInput = page.locator("input[name='firstname']:visible, input[aria-label*='First name' i]:visible, input[placeholder*='First name' i]:visible, input[type='text']:visible").first();
       }
-      await fnInput.waitFor({ state: "visible", timeout: 15000 });
-      await humanType(page, fnInput, firstName);
+      if ((await fnInput.count()) > 0 && (await fnInput.isVisible().catch(() => false))) {
+        await humanType(page, fnInput, firstName);
+      } else {
+        await fnInput.waitFor({ state: "visible", timeout: 10000 }).catch(async () => {
+          console.warn("[Facebook] First Name input still not visible. Refreshing page...");
+          await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
+          await page.waitForTimeout(3500);
+        });
+        if ((await fnInput.count()) > 0 && (await fnInput.isVisible().catch(() => false))) {
+          await humanType(page, fnInput, firstName);
+        }
+      }
 
       let lnInput = page.locator("input[name='lastname']:visible, input[aria-label*='Surname' i]:visible, input[placeholder*='Surname' i]:visible, input[aria-label*='Last name' i]:visible").first();
       if ((await lnInput.count()) === 0 || !(await lnInput.isVisible().catch(() => false))) {
         lnInput = page.locator("input[type='text']:visible").nth(1);
       }
-      await lnInput.waitFor({ state: "visible", timeout: 15000 });
-      await humanType(page, lnInput, lastName);
+      if ((await lnInput.count()) > 0 && (await lnInput.isVisible().catch(() => false))) {
+        await humanType(page, lnInput, lastName);
+      } else {
+        await lnInput.waitFor({ state: "visible", timeout: 8000 }).catch(() => {});
+        if (await lnInput.isVisible().catch(() => false)) {
+          await humanType(page, lnInput, lastName);
+        }
+      }
 
       // 2. Select Date of Birth & Gender dynamically
       await fillBirthdayAndGender(page, dobObj, randomGender);
@@ -2202,8 +2256,14 @@ async function run() {
       if ((await emInput.count()) === 0 || !(await emInput.isVisible().catch(() => false))) {
         emInput = page.locator("input[type='text']:visible").nth(2);
       }
-      await emInput.waitFor({ state: "visible", timeout: 15000 });
-      await humanType(page, emInput, email);
+      if ((await emInput.count()) > 0 && (await emInput.isVisible().catch(() => false))) {
+        await humanType(page, emInput, email);
+      } else {
+        await emInput.waitFor({ state: "visible", timeout: 8000 }).catch(() => {});
+        if (await emInput.isVisible().catch(() => false)) {
+          await humanType(page, emInput, email);
+        }
+      }
 
       // Re-enter email confirmation if required
       await page.waitForTimeout(600);
@@ -2215,8 +2275,14 @@ async function run() {
       // 4. Fill Password
       console.log(`[Facebook] Entering Password (masked)...`);
       let pwInput = page.locator("input[name='reg_passwd__']:visible, input[type='password']:visible").first();
-      await pwInput.waitFor({ state: "visible", timeout: 15000 });
-      await humanType(page, pwInput, password);
+      if ((await pwInput.count()) > 0 && (await pwInput.isVisible().catch(() => false))) {
+        await humanType(page, pwInput, password);
+      } else {
+        await pwInput.waitFor({ state: "visible", timeout: 8000 }).catch(() => {});
+        if (await pwInput.isVisible().catch(() => false)) {
+          await humanType(page, pwInput, password);
+        }
+      }
 
       // 5. Submit with natural hesitation pause
       await page.waitForTimeout(1000 + Math.random() * 800);
