@@ -215,6 +215,10 @@ console.log(`Frozen Fingerprint: Loaded (${fingerprintPath})`);
 console.log(`WebRTC Protection: Active`);
 console.log("============================================================");
 
+if (fingerprint && fingerprint.headers) {
+  fingerprint.headers["accept-language"] = "en-US,en;q=0.9";
+}
+
 const browserConfig = {
   user_data_dir: profileDir,
   headless: false,
@@ -225,6 +229,11 @@ const browserConfig = {
   screen: { maxWidth: scr.width, maxHeight: scr.height },
   webgl_config: persona.webgl_config || undefined,
   proxy: parseProxy(ensureStickyProxy(proxyStr, profileName)),
+  locale: "en-US",
+  firefox_user_prefs: {
+    "intl.accept_languages": "en-US, en",
+    "javascript.use_us_english_locale": true,
+  },
   geoip: true,
   fingerprint,
   i_know_what_im_doing: true,
@@ -233,10 +242,24 @@ const browserConfig = {
     "audio:seed": persona["audio:seed"],
     "fonts:spacing_seed": persona["fonts:spacing_seed"],
     timezone: persona.timezone || "America/Chicago",
+    "locale:region": "US",
+    "locale:language": "en",
+    "locale:all": "en-US, en",
   },
 };
 
 const browser = await Camoufox(browserConfig);
+const context = (browser.contexts && browser.contexts().length > 0) ? browser.contexts()[0] : null;
+if (context) {
+  await context.addCookies([
+    {
+      name: "locale",
+      value: "en_US",
+      domain: ".facebook.com",
+      path: "/",
+    },
+  ]).catch(() => {});
+}
 const page = (browser.pages && browser.pages().length > 0) ? browser.pages()[0] : await browser.newPage();
 try {
   await page.goto("https://www.facebook.com/?locale=en_US", { waitUntil: "domcontentloaded", timeout: 45000 });

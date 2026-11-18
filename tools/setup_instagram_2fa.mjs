@@ -1052,6 +1052,11 @@ const GPU_CONFIGURATIONS = [
     exclude_addons: ["UBO"],     // Exclude bundled ad-blocker to prevent CSP data: injection violations & CDN script drops
     screen: { maxWidth: scr.width, maxHeight: scr.height },
     proxy: parseProxy(ensureStickyProxy(proxyArg, email)),
+    locale: "en-US",
+    firefox_user_prefs: {
+      "intl.accept_languages": "en-US, en",
+      "javascript.use_us_english_locale": true,
+    },
     webgl_config: persona?.webgl_config || undefined,
     i_know_what_im_doing: true,
   };
@@ -1063,8 +1068,9 @@ const GPU_CONFIGURATIONS = [
       "audio:seed": persona["audio:seed"],
       "fonts:spacing_seed": persona["fonts:spacing_seed"],
       timezone: persona.timezone || "America/Chicago",
-      "locale:region": persona["locale:region"] || "US",
-      "locale:language": persona["locale:language"] || "en",
+      "locale:region": "US",
+      "locale:language": "en",
+      "locale:all": "en-US, en",
     };
   }
 
@@ -1108,9 +1114,23 @@ const GPU_CONFIGURATIONS = [
       try { fs.writeFileSync(fingerprintPath, JSON.stringify(fingerprint, null, 2)); } catch (e) { }
     }
   }
+  if (fingerprint && fingerprint.headers) {
+    fingerprint.headers["accept-language"] = "en-US,en;q=0.9";
+  }
   browserConfig.fingerprint = fingerprint;
 
   const browser = await Camoufox(browserConfig);
+  const context = (browser.contexts && browser.contexts().length > 0) ? browser.contexts()[0] : null;
+  if (context) {
+    await context.addCookies([
+      {
+        name: "ig_lang",
+        value: "en",
+        domain: ".instagram.com",
+        path: "/",
+      },
+    ]).catch(() => {});
+  }
   const page = (browser.pages && browser.pages().length > 0) ? browser.pages()[0] : await browser.newPage();
   await page.bringToFront().catch(() => {});
 

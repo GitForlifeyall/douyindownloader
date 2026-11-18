@@ -209,10 +209,10 @@ function deriveTimezoneFromProxy(proxyStr) {
   if (p.includes("us_california") || p.includes("los_angeles") || p.includes("pacific")) return { tz: "America/Los_Angeles", region: "US", lang: "en" };
   if (p.includes("us_new_york") || p.includes("eastern")) return { tz: "America/New_York", region: "US", lang: "en" };
   if (p.includes("-cc-us") || p.includes("united_states")) return { tz: "America/Chicago", region: "US", lang: "en" };
-  if (p.includes("-cc-jp") || p.includes("japan") || p.includes("tokyo")) return { tz: "Asia/Tokyo", region: "JP", lang: "ja" };
-  if (p.includes("-cc-in") || p.includes("india") || p.includes("mumbai") || p.includes("ludhiana")) return { tz: "Asia/Kolkata", region: "IN", lang: "en" };
+  if (p.includes("-cc-jp") || p.includes("japan") || p.includes("tokyo")) return { tz: "Asia/Tokyo", region: "JP", lang: "en" };
+  if (p.includes("-cc-in") || p.includes("india") || p.includes("mumbai") || p.includes("ludhiana") || p.includes("ahmedabad")) return { tz: "Asia/Kolkata", region: "IN", lang: "en" };
   if (p.includes("-cc-gb") || p.includes("-cc-uk") || p.includes("london")) return { tz: "Europe/London", region: "GB", lang: "en" };
-  if (p.includes("-cc-de") || p.includes("germany") || p.includes("berlin")) return { tz: "Europe/Berlin", region: "DE", lang: "de" };
+  if (p.includes("-cc-de") || p.includes("germany") || p.includes("berlin")) return { tz: "Europe/Berlin", region: "DE", lang: "en" };
   return { tz: "America/Chicago", region: "US", lang: "en" };
 }
 
@@ -1262,13 +1262,13 @@ async function createFacebookPage(page, customPageName = null, customBio = null)
       await humanClick(page, pageCreateBtn).catch(() => pageCreateBtn.click());
       await page.waitForTimeout(4000);
     } else {
-      console.log("[Facebook] Navigating to https://www.facebook.com/pages/create/...");
-      await safeGoto(page, "https://www.facebook.com/pages/create/", { waitUntil: "domcontentloaded" });
+      console.log("[Facebook] Navigating to https://www.facebook.com/pages/create/?locale=en_US...");
+      await safeGoto(page, "https://www.facebook.com/pages/create/?locale=en_US", { waitUntil: "domcontentloaded" });
       await page.waitForTimeout(4000);
     }
   } else {
-    console.log("[Facebook] Menu button not found, navigating directly to https://www.facebook.com/pages/create/...");
-    await safeGoto(page, "https://www.facebook.com/pages/create/", { waitUntil: "domcontentloaded" });
+    console.log("[Facebook] Menu button not found, navigating directly to https://www.facebook.com/pages/create/?locale=en_US...");
+    await safeGoto(page, "https://www.facebook.com/pages/create/?locale=en_US", { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(4000);
   }
 
@@ -1672,6 +1672,9 @@ async function run() {
 
   console.log("[Camoufox] Launching Camoufox with residential proxy, frozen persona & WebRTC protection...");
   const scr = persona.screen_resolution || { width: 1920, height: 1080 };
+  if (fingerprint && fingerprint.headers) {
+    fingerprint.headers["accept-language"] = "en-US,en;q=0.9";
+  }
   const browserConfig = {
     user_data_dir: profileDir,
     headless: headless,
@@ -1681,6 +1684,11 @@ async function run() {
     exclude_addons: ["UBO"],     // Exclude bundled ad-blocker to prevent CSP data: injection violations & CDN script drops
     screen: { maxWidth: scr.width, maxHeight: scr.height },
     fingerprint,
+    locale: "en-US",
+    firefox_user_prefs: {
+      "intl.accept_languages": "en-US, en",
+      "javascript.use_us_english_locale": true,
+    },
     webgl_config: persona.webgl_config || undefined,
     i_know_what_im_doing: true,
     config: {
@@ -1690,13 +1698,25 @@ async function run() {
       "audio:seed": persona["audio:seed"],
       "fonts:spacing_seed": persona["fonts:spacing_seed"],
       timezone: persona.timezone || chosenTz,
-      "locale:region": persona["locale:region"] || chosenRegion,
-      "locale:language": persona["locale:language"] || chosenLang,
+      "locale:region": "US",
+      "locale:language": "en",
+      "locale:all": "en-US, en",
     },
     proxy: parsedProxy,
   };
 
   const browser = await Camoufox(browserConfig);
+  const context = (browser.contexts && browser.contexts().length > 0) ? browser.contexts()[0] : null;
+  if (context) {
+    await context.addCookies([
+      {
+        name: "locale",
+        value: "en_US",
+        domain: ".facebook.com",
+        path: "/",
+      },
+    ]).catch(() => {});
+  }
   const page = (browser.pages && browser.pages().length > 0) ? browser.pages()[0] : await browser.newPage();
   await page.bringToFront().catch(() => { });
 
@@ -1950,7 +1970,7 @@ async function run() {
       try {
         await page.waitForTimeout(4000);
         if (!page.url().includes("facebook.com")) {
-          await safeGoto(page, "https://www.facebook.com/", { waitUntil: "domcontentloaded" });
+          await safeGoto(page, "https://www.facebook.com/?locale=en_US", { waitUntil: "domcontentloaded" });
         }
         pageDetails = await createFacebookPage(page);
       } catch (pageErr) {

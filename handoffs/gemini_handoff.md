@@ -7,6 +7,24 @@ This document logs all architectural decisions, code changes, pipeline updates, 
 
 ## Session History & Major Changes
 
+### [2026-11-18] Multi-Layer English Language Enforcement Against Proxy Regional Language Bleed
+1. **Root Cause**:
+   - When regional residential proxies are used (e.g. India `-cc-in` / `city-ahmedabad`, Japan `-cc-jp`, Germany `-cc-de`), Meta detects the IP territory or Camoufox's default `geoip: true` behaviour without an explicit `locale` configuration, causing the UI to flip into local regional languages (Gujarati, Hindi, Japanese, German, etc.).
+   - While timezone alignment (`Asia/Kolkata`) must be preserved for anti-fraud coherence, the browser language must remain strictly English (`en-US`).
+2. **Resolution & Multi-Layer Enforcement**:
+   - **Camoufox Options & Firefox Preferences**:
+     - Explicitly passed `locale: "en-US"` to `Camoufox(browserConfig)` across [`tools/facebook_signup_camoufox.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/facebook_signup_camoufox.mjs), [`tools/instagram_signup_camoufox.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/instagram_signup_camoufox.mjs), [`tools/open_fb_profile.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/open_fb_profile.mjs), [`tools/open_ig_profile.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/open_ig_profile.mjs), and [`tools/setup_instagram_2fa.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/setup_instagram_2fa.mjs).
+     - Configured `firefox_user_prefs: { "intl.accept_languages": "en-US, en", "javascript.use_us_english_locale": true }`.
+   - **Camoufox Config Object**:
+     - Explicitly enforced `"locale:region": "US"`, `"locale:language": "en"`, and `"locale:all": "en-US, en"` while preserving proxy-aligned timezone.
+   - **Browser Context Cookies Pre-seeding**:
+     - Pre-seeded HTTP context cookies immediately on browser initialization:
+       - Facebook: `locale=en_US` on `.facebook.com`.
+       - Instagram: `ig_lang=en` on `.instagram.com`.
+   - **HTTP Header & URL Parameter Enforcement**:
+     - Enforced `fingerprint.headers["accept-language"] = "en-US,en;q=0.9"`.
+     - Enforced `?locale=en_US` on all Facebook URLs (including `/pages/create/?locale=en_US`) and `?hl=en` on all Instagram URLs.
+
 ### [2026-11-18] Facebook Registration Form Field Synchronization & Visible Selector Hardening
 1. **Root Cause**:
    - Modern Facebook desktop registration on `/reg/` uses dynamic React DOM with anonymous fields (`name=""`, `placeholder=""`, null `aria-label`).
