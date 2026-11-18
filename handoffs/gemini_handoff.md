@@ -7,6 +7,15 @@ This document logs all architectural decisions, code changes, pipeline updates, 
 
 ## Session History & Major Changes
 
+### [2026-11-18] WebGL OS SQLite Database Pool Alignment (`No WebGL data found for OS: win` Fix)
+1. **Root Cause**:
+   - `tools/facebook_signup_camoufox.mjs`, `tools/open_fb_profile.mjs`, and `tools/open_ig_profile.mjs` had `GPU_CONFIGURATIONS` populated with synthetic ANGLE GPU names (e.g. `RTX 3060`, `RTX 4060`, `Iris Xe Direct3D11 vs_5_0 ps_5_0, D3D11`).
+   - Camoufox's internal C++ launcher validates `webgl_config` against its local SQLite database (`webgl_data.db` via `sampleWebGL`). Because these synthetic GPU strings did not exist in `webgl_fingerprints`, Camoufox threw: `Error: No WebGL data found for OS: win`.
+2. **Resolution**:
+   - Aligned `GPU_CONFIGURATIONS` in [`tools/facebook_signup_camoufox.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/facebook_signup_camoufox.mjs), [`tools/open_fb_profile.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/open_fb_profile.mjs), and [`tools/open_ig_profile.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/open_ig_profile.mjs) to the 15 verified Camoufox SQLite Windows records (`GTX 980`, `GTX 480`, `8800 GTX`, `Radeon R9 200`, `HD 3200`, `Intel HD Graphics`, `Intel 945GM`).
+   - Scanned and healed existing `persona.json` profiles in `output/profiles facebook/` (including `LoganEllas00121` and `BurleighVandall804767`).
+   - Verified live with `sampleWebGL`: 100% PASS across NVIDIA, Intel, and AMD.
+
 ### [2026-11-18] Suspension State Detection & Terminal Manual OTP Fallback
 1. **Instagram Account Suspension Handling**:
    - Added `isSuspendedScreen` and `markInstagramAccountSuspended` across [`tools/instagram_signup_camoufox.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/instagram_signup_camoufox.mjs).
