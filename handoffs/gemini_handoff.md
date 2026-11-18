@@ -1212,3 +1212,16 @@ This document logs all architectural decisions, code changes, pipeline updates, 
    - Fixed missing `import fs from "node:fs";`.
    - Integrated `ensureStickyProxy`, BrowserForge fingerprint persistence, and `CAMOUFOX_UA` alignment.
    - Added automatic proxy reuse lookup from `output/facebook_registered_accounts.json` or `<profileDir>/account_info.json`.
+
+### Session: 2026-11-18 — Bugfix: Resolution of 2FA Options Gear Menu Hang on Profile Page
+
+- **Root Cause of the Hang in User Screenshot**:
+  During Step 3 of onboarding (`setupInstagram2FA` in [`tools/setup_instagram_2fa.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/setup_instagram_2fa.mjs)), the script attempted organic navigation to Settings by clicking the `svg[aria-label='Options']` gear icon (`⚙`) on the user profile (`/ananyatwist60/`).
+  On Instagram web, clicking the gear icon pops up a dropdown modal with items:
+  `["Apps and websites", "QR code", "Notifications", "Settings and privacy", "Meta Verified", "Supervision", "Login activity", "Log out"]`.
+  The script was immediately looking for an `Accounts Center` link without clicking `"Settings and privacy"` first. Because `"Accounts Center"` is located inside the Settings page (not in the popup menu itself), the script timed out while the popup menu stayed open and blocked subsequent interactions.
+
+- **Fix Applied in `tools/setup_instagram_2fa.mjs`**:
+  1. Added an explicit handler for the popup menu: immediately clicks `"Settings and privacy"` (`button:has-text('Settings and privacy')`) after clicking the gear icon.
+  2. Added direct navigation fallback to `https://www.instagram.com/accounts/settings/?hl=en` if Accounts Center is not immediately reachable from the dropdown.
+  3. Ensured no blocking modal dialog is left unhandled on the profile screen.

@@ -564,12 +564,32 @@ export async function setupInstagram2FA(page, emailTarget, cId, rToken) {
       await optionsBtn.hover().catch(() => {});
       await page.waitForTimeout(300);
       await optionsBtn.click().catch(() => {});
-      await page.waitForTimeout(3500);
+      await page.waitForTimeout(1500);
+
+      // On Instagram web, clicking the gear icon opens a popup menu containing:
+      // "Apps and websites", "QR code", "Notifications", "Settings and privacy", etc.
+      // We MUST click "Settings and privacy" to enter the settings page containing Accounts Center.
+      const settingsOption = page.locator("button:has-text('Settings and privacy'), [role='button']:has-text('Settings and privacy'), div:has-text('Settings and privacy'), a:has-text('Settings and privacy'), [aria-label*='Settings and privacy' i]").first();
+      if ((await settingsOption.count()) > 0 && (await settingsOption.isVisible().catch(() => false))) {
+        console.log("[Instagram 2FA] Step A.1: Clicking 'Settings and privacy' in options dropdown...");
+        await settingsOption.hover().catch(() => {});
+        await page.waitForTimeout(200);
+        await settingsOption.click().catch(() => {});
+        await page.waitForTimeout(3500);
+      }
     }
 
-    // Step B: Click 'Accounts Center' card in Settings
-    const acSelector = "a[href*='accountscenter.instagram.com'], a:has-text('Accounts Center'), div:has-text('Accounts Center'):has-text('Password, security')";
+    // Step B: Locate 'Accounts Center' card in Settings
+    const acSelector = "a[href*='accountscenter.instagram.com'], a:has-text('Accounts Center'), div:has-text('Accounts Center'):has-text('Password, security'), [aria-label*='Accounts Center' i]";
     let acBtn = page.locator(acSelector).first();
+
+    // If Accounts Center is not yet visible, navigate directly to /accounts/settings/?hl=en
+    if ((await acBtn.count()) === 0 || !(await acBtn.isVisible().catch(() => false))) {
+      console.log("[Instagram 2FA] Navigating to /accounts/settings/?hl=en to ensure Accounts Center is exposed...");
+      await safeGoto(page, "https://www.instagram.com/accounts/settings/?hl=en", { waitUntil: "domcontentloaded", timeout: 25000 });
+      await page.waitForTimeout(2500);
+      acBtn = page.locator(acSelector).first();
+    }
     for (let i = 0; i < 4; i++) {
       if ((await acBtn.count()) > 0 && (await acBtn.isVisible())) {
         console.log("[Instagram 2FA] Step B: Clicking 'Accounts Center' card...");
