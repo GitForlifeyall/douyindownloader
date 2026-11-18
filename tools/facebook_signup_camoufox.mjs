@@ -693,6 +693,12 @@ async function handlePostSignupModals(page, maxWaitMs = 15000) {
   const startTime = Date.now();
 
   while (Date.now() - startTime < maxWaitMs) {
+    const suspCheck = await isFacebookSuspendedScreen(page);
+    if (suspCheck.isSuspended) {
+      console.error(`[Facebook Onboarding] Account suspension detected: ${suspCheck.url}`);
+      break;
+    }
+
     let handled = false;
 
     // 1. "Save login info" modal
@@ -1019,6 +1025,73 @@ function generateUniquePassword(firstName, lastName) {
   return `${cleanFirst}${sym}${num}`;
 }
 
+function markFacebookAccountSuspended(emailOrProfile, url, profileDir = null) {
+  try {
+    if (fs.existsSync(REGISTERED_ACCOUNTS_FILE)) {
+      const existing = JSON.parse(fs.readFileSync(REGISTERED_ACCOUNTS_FILE, "utf-8"));
+      const target = (emailOrProfile || "").toLowerCase();
+      const idx = existing.findIndex((item) => {
+        const em = (item && item.email ? item.email : "").toLowerCase();
+        const fn = (item && item.fullname ? item.fullname : "").toLowerCase();
+        return em === target || fn === target;
+      });
+      if (idx >= 0) {
+        existing[idx].status = "SUSPENDED";
+        existing[idx].is_suspended = true;
+        existing[idx].suspended_at = new Date().toISOString();
+        existing[idx].suspension_url = url;
+        fs.writeFileSync(REGISTERED_ACCOUNTS_FILE, JSON.stringify(existing, null, 2), "utf-8");
+        console.log(`[Database] Updated account ${emailOrProfile} status to SUSPENDED in ${REGISTERED_ACCOUNTS_FILE}`);
+      }
+    }
+    if (profileDir) {
+      const infoPath = path.join(profileDir, "account_info.json");
+      let info = {};
+      if (fs.existsSync(infoPath)) {
+        try { info = JSON.parse(fs.readFileSync(infoPath, "utf-8")); } catch (e) {}
+      }
+      info.status = "SUSPENDED";
+      info.is_suspended = true;
+      info.suspended_at = new Date().toISOString();
+      info.suspension_url = url;
+      fs.writeFileSync(infoPath, JSON.stringify(info, null, 2), "utf-8");
+      console.log(`[Profile] Saved SUSPENDED state in ${infoPath}`);
+    }
+  } catch (err) {
+    console.warn(`[Database] Error updating suspended status: ${err.message}`);
+  }
+}
+
+async function isFacebookSuspendedScreen(page) {
+  try {
+    const curUrl = page.url() || "";
+    if (
+      curUrl.includes("checkpoint/1501092823525282") ||
+      curUrl.includes("/checkpoint/1501092823525282/") ||
+      curUrl.includes("suspended")
+    ) {
+      return { isSuspended: true, url: curUrl, reason: "checkpoint_1501092823525282" };
+    }
+    const pageText = await page.evaluate(() => {
+      const b = document.body;
+      return b ? (b.innerText || "").slice(0, 4000).toLowerCase() : "";
+    }).catch(() => "");
+    if (
+      pageText.includes("we suspended your account") ||
+      pageText.includes("your account has been suspended") ||
+      pageText.includes("you have 180 days to disagree") ||
+      pageText.includes("account was suspended") ||
+      pageText.includes("we disabled your account") ||
+      pageText.includes("your account has been disabled") ||
+      pageText.includes("account disabled") ||
+      pageText.includes("disagree with decision")
+    ) {
+      return { isSuspended: true, url: curUrl, reason: "suspension_text_match" };
+    }
+  } catch (e) {}
+  return { isSuspended: false, url: null, reason: null };
+}
+
 function saveRegisteredAccount(record) {
   try {
     fs.mkdirSync(path.dirname(REGISTERED_ACCOUNTS_FILE), { recursive: true });
@@ -1165,6 +1238,14 @@ async function handleOtpChallenge(page, targetEmail, cId, rToken, sessionStartTi
 
   let foundInput = false;
   for (let i = 0; i < 20; i++) {
+    const suspCheck = await isFacebookSuspendedScreen(page);
+    if (suspCheck.isSuspended) {
+      console.error("=".repeat(65));
+      console.error(`[Facebook] ⚠️ ACCOUNT SUSPENDED: Facebook redirected to ${suspCheck.url}`);
+      console.error("=".repeat(65));
+      return { success: false, otp: null, thread: null, suspended: true, url: suspCheck.url };
+    }
+
     const codeInput = page.locator("input[name='code'], input[aria-label*='code' i], input[aria-label*='कोड' i], input[placeholder*='code' i], input[placeholder*='कोड' i], input[placeholder*='Confirmation code' i]");
     if ((await codeInput.count()) > 0 && (await codeInput.first().isVisible().catch(() => false))) {
       foundInput = true;
@@ -1176,7 +1257,7 @@ async function handleOtpChallenge(page, targetEmail, cId, rToken, sessionStartTi
       bodyText.includes("5-digit code") ||
       bodyText.includes("पुष्टि कोड") ||
       bodyText.includes("5 अंकों का कोड") ||
-      page.url().includes("checkpoint") ||
+      (page.url().includes("checkpoint") && !page.url().includes("1501092823525282")) ||
       page.url().includes("confirmemail")
     ) {
       foundInput = true;
@@ -1186,6 +1267,13 @@ async function handleOtpChallenge(page, targetEmail, cId, rToken, sessionStartTi
   }
 
   if (!foundInput) {
+    const finalSuspCheck = await isFacebookSuspendedScreen(page);
+    if (finalSuspCheck.isSuspended) {
+      console.error("=".repeat(65));
+      console.error(`[Facebook] ⚠️ ACCOUNT SUSPENDED: Facebook redirected to ${finalSuspCheck.url}`);
+      console.error("=".repeat(65));
+      return { success: false, otp: null, thread: null, suspended: true, url: finalSuspCheck.url };
+    }
     console.log("[Facebook] Not on OTP confirmation screen. Current URL:", page.url());
     return { success: false, otp: null, thread: null };
   }
@@ -1232,6 +1320,15 @@ async function handleOtpChallenge(page, targetEmail, cId, rToken, sessionStartTi
     await page.waitForTimeout(10000);
     riskMark("otp_submitted");
     console.log(`[Facebook] Current URL: ${page.url()} | Title: '${await page.title()}'`);
+
+    const postOtpSusp = await isFacebookSuspendedScreen(page);
+    if (postOtpSusp.isSuspended) {
+      console.error("=".repeat(65));
+      console.error(`[Facebook] ⚠️ ACCOUNT SUSPENDED: Facebook redirected to ${postOtpSusp.url}`);
+      console.error("=".repeat(65));
+      return { success: false, otp, thread, suspended: true, url: postOtpSusp.url };
+    }
+
     return { success: true, otp, thread };
   } else {
     console.warn("[Facebook] Could not fetch OTP automatically within 150s. Browser will remain open for manual inspection.");
@@ -1992,16 +2089,133 @@ async function run() {
       const postSubmitUrl = page.url();
       const postSubmitTitle = await page.title();
       console.log(`[Facebook] Current URL: ${postSubmitUrl} | Title: '${postSubmitTitle}'`);
+
+      const postSubmitSusp = await isFacebookSuspendedScreen(page);
+      if (postSubmitSusp.isSuspended) {
+        console.error("=".repeat(65));
+        console.error(`[Facebook] ⚠️ ACCOUNT SUSPENDED: Facebook redirected to ${postSubmitSusp.url}`);
+        console.error("=".repeat(65));
+        if (RISK) {
+          riskWarn(`Account immediately suspended on registration submit: ${postSubmitSusp.url}`);
+          riskEvent("account_suspended", { url: postSubmitSusp.url, reason: postSubmitSusp.reason, at: new Date().toISOString() });
+          riskMark("account_suspended");
+        }
+        await page.screenshot({ path: path.join(profileDir, "suspension_screen.png"), fullPage: true }).catch(() => {});
+        await page.screenshot({ path: "tests/test_artifacts/fb_latest_live.png", fullPage: true }).catch(() => {});
+        markFacebookAccountSuspended(email, postSubmitSusp.url, profileDir);
+        saveRegisteredAccount({
+          email,
+          password,
+          fullname: fullName,
+          first_name: firstName,
+          last_name: lastName,
+          date_of_birth: dobObj.formatted,
+          gender: randomGender,
+          proxy_used: effectiveProxy,
+          proxy_ip: proxyLocation.ip,
+          proxy_location: {
+            city: proxyLocation.city,
+            region: proxyLocation.region,
+            country: proxyLocation.country,
+            timezone: proxyLocation.timezone,
+          },
+          page_name: "",
+          page_url: "",
+          full_hotmail_thread: null,
+          account_created_at: new Date().toISOString(),
+          status: "SUSPENDED",
+          is_suspended: true,
+          suspended_at: new Date().toISOString(),
+          suspension_url: postSubmitSusp.url,
+        });
+        console.log("[Facebook] Automation strictly ABORTED due to account suspension.");
+        console.log("[Facebook] >>> SESSION IS LIVE ON YOUR SCREEN <<<");
+        return;
+      }
     }
 
     // 6. Handle OTP challenge if prompted (Retrieves code & full thread)
     const otpRes = await handleOtpChallenge(page, email, clientId, refreshToken, startedAt);
+    if (otpRes && otpRes.suspended) {
+      console.error("=".repeat(65));
+      console.error(`[Facebook] ⚠️ ACCOUNT SUSPENDED: Facebook is on suspension checkpoint ${otpRes.url}`);
+      console.error("=".repeat(65));
+      await page.screenshot({ path: path.join(profileDir, "suspension_screen.png"), fullPage: true }).catch(() => {});
+      await page.screenshot({ path: "tests/test_artifacts/fb_latest_live.png", fullPage: true }).catch(() => {});
+      markFacebookAccountSuspended(email, otpRes.url, profileDir);
+      saveRegisteredAccount({
+        email,
+        password,
+        fullname: fullName,
+        first_name: firstName,
+        last_name: lastName,
+        date_of_birth: dobObj.formatted,
+        gender: randomGender,
+        proxy_used: effectiveProxy,
+        proxy_ip: proxyLocation.ip,
+        proxy_location: {
+          city: proxyLocation.city,
+          region: proxyLocation.region,
+          country: proxyLocation.country,
+          timezone: proxyLocation.timezone,
+        },
+        page_name: "",
+        page_url: "",
+        full_hotmail_thread: otpRes.thread || null,
+        account_created_at: new Date().toISOString(),
+        status: "SUSPENDED",
+        is_suspended: true,
+        suspended_at: new Date().toISOString(),
+        suspension_url: otpRes.url,
+      });
+      console.log("[Facebook] Automation strictly ABORTED due to account suspension.");
+      console.log("[Facebook] >>> SESSION IS LIVE ON YOUR SCREEN <<<");
+      return;
+    }
 
     // Capture exit IP after OTP
     await captureExitIp(page, "post_otp");
 
     // 6.5 Handle Post-Registration Modals ("Save info", "Not Now", etc.)
     await handlePostSignupModals(page, 15000);
+
+    const postModalSusp = await isFacebookSuspendedScreen(page);
+    if (postModalSusp.isSuspended) {
+      console.error("=".repeat(65));
+      console.error(`[Facebook] ⚠️ ACCOUNT SUSPENDED: Facebook redirected to ${postModalSusp.url}`);
+      console.error("=".repeat(65));
+      await page.screenshot({ path: path.join(profileDir, "suspension_screen.png"), fullPage: true }).catch(() => {});
+      await page.screenshot({ path: "tests/test_artifacts/fb_latest_live.png", fullPage: true }).catch(() => {});
+      markFacebookAccountSuspended(email, postModalSusp.url, profileDir);
+      saveRegisteredAccount({
+        email,
+        password,
+        fullname: fullName,
+        first_name: firstName,
+        last_name: lastName,
+        date_of_birth: dobObj.formatted,
+        gender: randomGender,
+        proxy_used: effectiveProxy,
+        proxy_ip: proxyLocation.ip,
+        proxy_location: {
+          city: proxyLocation.city,
+          region: proxyLocation.region,
+          country: proxyLocation.country,
+          timezone: proxyLocation.timezone,
+        },
+        page_name: "",
+        page_url: "",
+        full_hotmail_thread: otpRes && otpRes.thread ? otpRes.thread : null,
+        account_created_at: new Date().toISOString(),
+        status: "SUSPENDED",
+        is_suspended: true,
+        suspended_at: new Date().toISOString(),
+        suspension_url: postModalSusp.url,
+      });
+      console.log("[Facebook] Automation strictly ABORTED due to account suspension.");
+      console.log("[Facebook] >>> SESSION IS LIVE ON YOUR SCREEN <<<");
+      return;
+    }
 
     // 7. Automated Facebook Page Creation Flow (Optional, guarded by !skipPage)
     let pageDetails = { pageName: "Personal Page", pageUrl: "https://www.facebook.com" };

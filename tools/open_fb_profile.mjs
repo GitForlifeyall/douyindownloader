@@ -261,6 +261,72 @@ if (context) {
   ]).catch(() => {});
 }
 const page = (browser.pages && browser.pages().length > 0) ? browser.pages()[0] : await browser.newPage();
+async function isFacebookSuspendedScreen(page) {
+  try {
+    const curUrl = page.url() || "";
+    if (
+      curUrl.includes("checkpoint/1501092823525282") ||
+      curUrl.includes("/checkpoint/1501092823525282/") ||
+      curUrl.includes("suspended")
+    ) {
+      return { isSuspended: true, url: curUrl, reason: "checkpoint_1501092823525282" };
+    }
+    const pageText = await page.evaluate(() => {
+      const b = document.body;
+      return b ? (b.innerText || "").slice(0, 4000).toLowerCase() : "";
+    }).catch(() => "");
+    if (
+      pageText.includes("we suspended your account") ||
+      pageText.includes("your account has been suspended") ||
+      pageText.includes("you have 180 days to disagree") ||
+      pageText.includes("account was suspended") ||
+      pageText.includes("we disabled your account") ||
+      pageText.includes("your account has been disabled") ||
+      pageText.includes("account disabled") ||
+      pageText.includes("disagree with decision")
+    ) {
+      return { isSuspended: true, url: curUrl, reason: "suspension_text_match" };
+    }
+  } catch (e) {}
+  return { isSuspended: false, url: null, reason: null };
+}
+
+function markFacebookAccountSuspended(profileName, url, profileDir) {
+  try {
+    const regFile = path.resolve("output", "facebook_registered_accounts.json");
+    if (fs.existsSync(regFile)) {
+      const existing = JSON.parse(fs.readFileSync(regFile, "utf-8"));
+      const target = (profileName || "").toLowerCase();
+      const idx = existing.findIndex((item) => {
+        const em = (item && item.email ? item.email : "").toLowerCase();
+        const fn = (item && item.fullname ? item.fullname : "").toLowerCase();
+        return em === target || fn === target;
+      });
+      if (idx >= 0) {
+        existing[idx].status = "SUSPENDED";
+        existing[idx].is_suspended = true;
+        existing[idx].suspended_at = new Date().toISOString();
+        existing[idx].suspension_url = url;
+        fs.writeFileSync(regFile, JSON.stringify(existing, null, 2), "utf-8");
+        console.log(`[Database] Updated account ${profileName} status to SUSPENDED in ${regFile}`);
+      }
+    }
+    const infoPath = path.join(profileDir, "account_info.json");
+    let info = {};
+    if (fs.existsSync(infoPath)) {
+      try { info = JSON.parse(fs.readFileSync(infoPath, "utf-8")); } catch (e) {}
+    }
+    info.status = "SUSPENDED";
+    info.is_suspended = true;
+    info.suspended_at = new Date().toISOString();
+    info.suspension_url = url;
+    fs.writeFileSync(infoPath, JSON.stringify(info, null, 2), "utf-8");
+    console.log(`[Profile] Saved SUSPENDED state in ${infoPath}`);
+  } catch (err) {
+    console.warn(`[Database] Error updating suspended status: ${err.message}`);
+  }
+}
+
 try {
   await page.goto("https://www.facebook.com/?locale=en_US", { waitUntil: "domcontentloaded", timeout: 45000 });
 } catch (err) {
@@ -268,6 +334,15 @@ try {
   await page.goto("https://www.facebook.com/?locale=en_US", { waitUntil: "domcontentloaded", timeout: 45000 }).catch(() => { });
 }
 await page.bringToFront().catch(() => { });
+
+await page.waitForTimeout(2000);
+const suspCheck = await isFacebookSuspendedScreen(page);
+if (suspCheck.isSuspended) {
+  console.error("=".repeat(65));
+  console.error(`[Facebook] ⚠️ ACCOUNT SUSPENDED: Facebook is on suspension checkpoint ${suspCheck.url}`);
+  console.error("=".repeat(65));
+  markFacebookAccountSuspended(profileName, suspCheck.url, profileDir);
+}
 
 console.log("[Facebook] Profile is loaded and live on your screen.");
 console.log("[Facebook] Close the browser window when you are done.");

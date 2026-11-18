@@ -7,6 +7,18 @@ This document logs all architectural decisions, code changes, pipeline updates, 
 
 ## Session History & Major Changes
 
+### [2026-11-18] Facebook Checkpoint 1501092823525282 Account Suspension Auto-Detection
+1. **Background & Root Cause**:
+   - Facebook's account suspension / disabled endpoint URL is `https://www.facebook.com/checkpoint/1501092823525282/`.
+   - The script previously treated any `/checkpoint/` substring as a generic OTP screen, which caused it to wait and poll for an OTP code on an already suspended account.
+2. **Resolution & Auto-Detection**:
+   - Implemented `isFacebookSuspendedScreen` and `markFacebookAccountSuspended` across [`tools/facebook_signup_camoufox.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/facebook_signup_camoufox.mjs) and [`tools/open_fb_profile.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/open_fb_profile.mjs).
+   - Detects `checkpoint/1501092823525282`, `/suspended/`, and suspension notices ("we suspended your account", "your account has been suspended", "you have 180 days to disagree", "we disabled your account").
+   - Differentiates suspension checkpoints from OTP verification screens so it never falsely polls for an OTP on suspended accounts.
+   - Automatically marks account status as `SUSPENDED` with `is_suspended: true`, `suspended_at`, and `suspension_url` in `output/facebook_registered_accounts.json` and `account_info.json`.
+   - Captures full-page screenshots to `suspension_screen.png` and `tests/test_artifacts/fb_latest_live.png`.
+   - Strictly aborts Page creation wizard, post-signup feed warmup, and onboarding.
+
 ### [2026-11-18] Facebook React Custom Combobox Selector Fix (Date of Birth & Gender)
 1. **Root Cause**:
    - Modern Facebook `/reg/` desktop UI uses React custom `[role='combobox']` elements with `[aria-haspopup='listbox']` and `[role='option']` dropdown popups, not native HTML `<select>` elements.
