@@ -26,6 +26,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import readline from "node:readline";
 import { execFileSync } from "node:child_process";
 import { setupInstagram2FA } from "./setup_instagram_2fa.mjs";
 import {
@@ -390,14 +391,17 @@ const proxyArg = getArg("--proxy", DEFAULT_PROXY);
 // Default Account (Fresh Unused Outlook string)
 const DEFAULT_ACCOUNT = "LexieSavinon95096@outlook.in|qdugfp46949|M.C543_BAY.0.U.MsaArtifacts.-CiAmYMxnXgpEiInE1zXpduQiHUVdu3On8BsaKtW8!6RobsbFEPwgoszVGqYjIAi2A9jCIVlrEDhTFY82wl6lO4PtPSvfHHWeHkiF47Lkam*PbBr1EaKJwx1LZtOAJDeeaVZuF!wUnW3iSvGLYZDRpAuLdsYp3ixzUFH62SBR3h4w0oDqVzZ97ykxsRy*b0qQvazCKNPXYwART9L17idTTV8rAI6lZl5aqle89NPCEMsTf8QhbqxHYJHiY906W8v12P9sRZkqRjQbjMDQ8UIahHg250WBvOVTiyRSXafQWGOquqU2juwshLCF4MAhGC5rBaZHgsBgV02Y0PGQPYZdHbHbuEOMO1MvrTuSQwFzPz8plDnC5ot2dOz*v*jvLymuIynWVeCQXxoXQgaXsJZi0GI$|9e5f94bc-e8a4-4e73-b8be-63364c29d753";
 
-const accountArg = getArg("--account", DEFAULT_ACCOUNT);
-let email = getArg("--email", "LexieSavinon95096@outlook.in");
+const explicitEmail = getArg("--email");
+const explicitAccount = getArg("--account");
+
+let email = explicitEmail || (explicitAccount ? null : "LexieSavinon95096@outlook.in");
 let refreshToken = null;
 let clientId = null;
 
+const accountArg = explicitAccount || (!explicitEmail ? DEFAULT_ACCOUNT : null);
 if (accountArg) {
   const parts = accountArg.split("|");
-  email = (parts[0] || "").trim();
+  if (!explicitEmail) email = (parts[0] || "").trim();
   if (parts.length >= 4) {
     refreshToken = (parts[2] || "").trim();
     let rawCId = (parts[3] || "").trim().replace(/["']/g, "");
@@ -1404,6 +1408,84 @@ function saveInstagramAccount(record) {
   }
 }
 
+function markInstagramAccountSuspended(email, url, profileDir = null) {
+  try {
+    if (fs.existsSync(REGISTERED_ACCOUNTS_FILE)) {
+      const existing = JSON.parse(fs.readFileSync(REGISTERED_ACCOUNTS_FILE, "utf-8"));
+      const idx = existing.findIndex((item) => (item.email || "").toLowerCase() === (email || "").toLowerCase());
+      if (idx >= 0) {
+        existing[idx].status = "SUSPENDED";
+        existing[idx].is_suspended = true;
+        existing[idx].suspended_at = new Date().toISOString();
+        existing[idx].suspension_url = url;
+        fs.writeFileSync(REGISTERED_ACCOUNTS_FILE, JSON.stringify(existing, null, 2), "utf-8");
+        console.log(`[Database] Updated account ${email} status to SUSPENDED in ${REGISTERED_ACCOUNTS_FILE}`);
+      }
+    }
+    if (profileDir) {
+      const infoPath = path.join(profileDir, "account_info.json");
+      if (fs.existsSync(infoPath)) {
+        try {
+          const info = JSON.parse(fs.readFileSync(infoPath, "utf-8"));
+          info.status = "SUSPENDED";
+          info.is_suspended = true;
+          info.suspended_at = new Date().toISOString();
+          info.suspension_url = url;
+          fs.writeFileSync(infoPath, JSON.stringify(info, null, 2), "utf-8");
+          console.log(`[Database] Updated profile account_info.json status to SUSPENDED`);
+        } catch (e) {}
+      }
+    }
+  } catch (err) {
+    console.warn(`[Database] Error updating suspended status: ${err.message}`);
+  }
+}
+
+async function isSuspendedScreen(page) {
+  try {
+    const curUrl = page.url() || "";
+    if (curUrl.includes("accounts/suspended") || curUrl.includes("/suspended/") || curUrl.includes("/suspended?")) {
+      return { isSuspended: true, url: curUrl, reason: "url_match" };
+    }
+    const pageText = await page.evaluate(() => {
+      const b = document.body;
+      return b ? (b.innerText || "").slice(0, 3000).toLowerCase() : "";
+    }).catch(() => "");
+    if (
+      pageText.includes("we suspended your account") ||
+      pageText.includes("your account has been suspended") ||
+      pageText.includes("you have 180 days to disagree") ||
+      pageText.includes("account was suspended")
+    ) {
+      return { isSuspended: true, url: curUrl, reason: "text_match" };
+    }
+  } catch (e) {}
+  return { isSuspended: false, url: page.url() || "" };
+}
+
+async function promptTerminalOtp(email, timeoutSec = 180) {
+  console.log("\n" + "=".repeat(65));
+  console.log(`[Manual OTP] Waiting for confirmation code for: ${email}`);
+  console.log(`[Manual OTP] Type the code below and press Enter (timeout: ${timeoutSec}s)...`);
+  console.log("=".repeat(65));
+
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const timer = setTimeout(() => {
+      rl.close();
+      console.log("\n[Manual OTP] Timed out waiting for terminal OTP input.");
+      resolve(null);
+    }, timeoutSec * 1000);
+
+    rl.question(`[Enter OTP for ${email}]: `, (answer) => {
+      clearTimeout(timer);
+      rl.close();
+      const code = (answer || "").replace(/\D/g, "").trim();
+      resolve(code || null);
+    });
+  });
+}
+
 // 8. Step 2: Handle Post-Registration Onboarding (Dismiss Notifications, Go to Profile, Edit Profile, Change DP & Bio)
 async function setupInstagramProfile(page, username, customBio = null, emailTarget = null) {
   console.log("=".repeat(60));
@@ -2302,6 +2384,14 @@ async function run() {
         }
       }
 
+      if (!otpData || !otpData.otp) {
+        console.log(`[Instagram] Automated inbox polling returned no code for ${email}. Prompting for terminal entry...`);
+        const manualCode = await promptTerminalOtp(email, 180);
+        if (manualCode) {
+          otpData = { otp: manualCode, thread: null };
+        }
+      }
+
       if (otpData && otpData.otp) {
         console.log(`[Instagram] >>> ENTERING RETRIEVED OTP (hidden) <<<`);
         const codeInput = page.locator(
@@ -2331,6 +2421,64 @@ async function run() {
         console.log("[Instagram] OTP submitted. Waiting 12s for account finalization...");
         await page.waitForTimeout(12000);
 
+        // Immediate check for account suspension (e.g. /accounts/suspended/)
+        const initialSusp = await isSuspendedScreen(page);
+        if (initialSusp.isSuspended) {
+          console.error("=".repeat(65));
+          console.error(`[Instagram] ⚠️ ACCOUNT SUSPENDED: Instagram redirected to ${initialSusp.url}`);
+          console.error("=".repeat(65));
+          if (RISK) {
+            riskWarn(`Account immediately suspended by Instagram: ${initialSusp.url}`);
+            riskEvent("account_suspended", { url: initialSusp.url, reason: initialSusp.reason, at: new Date().toISOString() });
+            riskMark("account_suspended");
+          }
+          await captureExitIp(page, "post_otp");
+          saveInstagramAccount({
+            email,
+            password: password,
+            username,
+            full_name: fullName,
+            first_name: firstName,
+            last_name: lastName,
+            date_of_birth: dobObj.formatted,
+            proxy_used: effectiveProxy,
+            proxy_ip: proxyLocation.ip,
+            proxy_location: {
+              city: proxyLocation.city,
+              region: proxyLocation.region,
+              country: proxyLocation.country,
+              timezone: proxyLocation.timezone,
+            },
+            instagram_url: `https://www.instagram.com/${username}/`,
+            full_hotmail_thread: otpData && otpData.thread ? otpData.thread : null,
+            account_created_at: new Date().toISOString(),
+            otp_submitted: otpSubmitted,
+            otp_verified: true,
+            status: "SUSPENDED",
+            is_suspended: true,
+            suspended_at: new Date().toISOString(),
+            suspension_url: initialSusp.url,
+            email_domain: RISK && RISK.email_identity ? RISK.email_identity.domain : null,
+            email_pattern: RISK && RISK.email_identity ? RISK.email_identity.local_part_pattern : null,
+            name_source: nameSource,
+            username_pattern: usernamePattern,
+            proxy_session: RISK && RISK.proxy ? RISK.proxy.session : null,
+            proxy_asn: RISK && RISK.proxy ? RISK.proxy.asn : null,
+            proxy_username_hash: RISK && RISK.proxy ? RISK.proxy.username_hash : null,
+            fingerprint_hash: RISK && RISK.fingerprint ? RISK.fingerprint.hash : null,
+            risk_log: path.relative(process.cwd(), path.join(profileDir, "risk_log.json")),
+            risk_warnings: RISK ? RISK.warnings : [],
+          });
+          markInstagramAccountSuspended(email, initialSusp.url, profileDir);
+          await page.screenshot({ path: path.join(profileDir, "suspension_screen.png"), fullPage: true }).catch(() => {});
+          await page.screenshot({ path: "tests/test_artifacts/ig_latest_live.png", fullPage: true }).catch(() => {});
+          riskMark("finished");
+          await captureExitIp(page, "final");
+          console.log("[Instagram] Post-signup onboarding & 2FA strictly ABORTED due to account suspension.");
+          console.log("[Instagram] >>> SESSION IS LIVE ON YOUR SCREEN <<<");
+          return;
+        }
+
         const postText = (await page.evaluate(() => (document.body ? document.body.innerText : "")).catch(() => "")).toLowerCase();
         const otpError = /(incorrect|wrong code|invalid code|try again|couldn['’]t confirm|code (?:has )?expired)/i.test(postText);
         const stillOnOtp = await isOtpScreen(page);
@@ -2356,8 +2504,65 @@ async function run() {
       const manualHoldEnd = Date.now() + 150000;
       while (Date.now() < manualHoldEnd) {
         const curUrl = page.url();
+        const suspInLoop = await isSuspendedScreen(page);
+        if (suspInLoop.isSuspended) {
+          console.error("=".repeat(65));
+          console.error(`[Instagram] ⚠️ ACCOUNT SUSPENDED: Instagram redirected to ${suspInLoop.url}`);
+          console.error("=".repeat(65));
+          if (RISK) {
+            riskWarn(`Account immediately suspended by Instagram: ${suspInLoop.url}`);
+            riskEvent("account_suspended", { url: suspInLoop.url, reason: suspInLoop.reason, at: new Date().toISOString() });
+            riskMark("account_suspended");
+          }
+          await captureExitIp(page, "post_otp");
+          saveInstagramAccount({
+            email,
+            password: password,
+            username,
+            full_name: fullName,
+            first_name: firstName,
+            last_name: lastName,
+            date_of_birth: dobObj.formatted,
+            proxy_used: effectiveProxy,
+            proxy_ip: proxyLocation.ip,
+            proxy_location: {
+              city: proxyLocation.city,
+              region: proxyLocation.region,
+              country: proxyLocation.country,
+              timezone: proxyLocation.timezone,
+            },
+            instagram_url: `https://www.instagram.com/${username}/`,
+            full_hotmail_thread: otpData && otpData.thread ? otpData.thread : null,
+            account_created_at: new Date().toISOString(),
+            otp_submitted: otpSubmitted,
+            otp_verified: true,
+            status: "SUSPENDED",
+            is_suspended: true,
+            suspended_at: new Date().toISOString(),
+            suspension_url: suspInLoop.url,
+            email_domain: RISK && RISK.email_identity ? RISK.email_identity.domain : null,
+            email_pattern: RISK && RISK.email_identity ? RISK.email_identity.local_part_pattern : null,
+            name_source: nameSource,
+            username_pattern: usernamePattern,
+            proxy_session: RISK && RISK.proxy ? RISK.proxy.session : null,
+            proxy_asn: RISK && RISK.proxy ? RISK.proxy.asn : null,
+            proxy_username_hash: RISK && RISK.proxy ? RISK.proxy.username_hash : null,
+            fingerprint_hash: RISK && RISK.fingerprint ? RISK.fingerprint.hash : null,
+            risk_log: path.relative(process.cwd(), path.join(profileDir, "risk_log.json")),
+            risk_warnings: RISK ? RISK.warnings : [],
+          });
+          markInstagramAccountSuspended(email, suspInLoop.url, profileDir);
+          await page.screenshot({ path: path.join(profileDir, "suspension_screen.png"), fullPage: true }).catch(() => {});
+          await page.screenshot({ path: "tests/test_artifacts/ig_latest_live.png", fullPage: true }).catch(() => {});
+          riskMark("finished");
+          await captureExitIp(page, "final");
+          console.log("[Instagram] Post-signup onboarding & 2FA strictly ABORTED due to account suspension.");
+          console.log("[Instagram] >>> SESSION IS LIVE ON YOUR SCREEN <<<");
+          return;
+        }
+
         // Check if user manually verified or if Instagram navigated away from signup
-        if (!curUrl.includes("emailsignup") && !curUrl.includes("challenge") && curUrl.includes("instagram.com")) {
+        if (!curUrl.includes("emailsignup") && !curUrl.includes("challenge") && !curUrl.includes("suspended") && curUrl.includes("instagram.com")) {
           console.log(`[Instagram] Progression detected! Current URL: ${curUrl}`);
           otpVerified = true;
           break;

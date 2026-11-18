@@ -29,6 +29,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import readline from "node:readline";
 import { execFileSync } from "node:child_process";
 import {
   humanGlide,
@@ -93,14 +94,17 @@ const proxyArgRaw = getArg("--proxy", DEFAULT_PROXY);
 // Default Account
 const DEFAULT_ACCOUNT = "BurleighVandall804767@outlook.in|okfxpt31125|M.C531_BL2.0.U.MsaArtifacts.-CkDMo1ONcvzw5Iz1LhRaqjELCxPFQjBAp*nR3Gb1di7r7MfFDRE6yDb7BNRahRNvERMdtAfpEvv77dHMpLCagdXxr3WLxowogfHAHyKOMKx6JqbHN2bLsBfPn4GvjSO0*XXja86UX1Hx06eJIsMozO2fb23bFE2Hy4GeKhlUHiHVNQCVPzLPoeBBtNygzw3CoRqz3PMc2k8rPzBv*ohD!EK796WkXa0MxMxs6Dgk4e63vWGh*o8QqMN1A7rLTVJlWzTK1IElHTDHNGpwzP4I13cRc5D5o1WYMaFVhXq2B*A*0yipa2mCkLyXQBy7eow7CvBpWapuwZefQLDHigPaVMeUl8JEfSDR!WMd23Zc5bQ6o4rWezPWxgWkKoK7XM0eUIVqlS4KGDU*O1YcjzBbobBiq54WXVvpCF9ygwfnJP6u|9e5f94bc-e8a4-4e73-b8be-63364c29d753";
 
-const accountArg = getArg("--account", DEFAULT_ACCOUNT);
-let email = getArg("--email", "BurleighVandall804767@outlook.in");
+const explicitEmail = getArg("--email");
+const explicitAccount = getArg("--account");
+
+let email = explicitEmail || (explicitAccount ? null : "BurleighVandall804767@outlook.in");
 let refreshToken = null;
 let clientId = null;
 
+const accountArg = explicitAccount || (!explicitEmail ? DEFAULT_ACCOUNT : null);
 if (accountArg && accountArg.includes("|")) {
   const parts = accountArg.split("|");
-  email = parts[0];
+  if (!explicitEmail) email = parts[0];
   refreshToken = parts[2];
   const rawCId = parts[3];
   if (rawCId) {
@@ -1088,6 +1092,29 @@ async function fillBirthdayAndGender(page, dobObj, targetGender) {
   }
 }
 
+async function promptTerminalOtp(email, timeoutSec = 180) {
+  console.log("\n" + "=".repeat(65));
+  console.log(`[Manual OTP] Waiting for confirmation code for: ${email}`);
+  console.log(`[Manual OTP] Type the code below and press Enter (timeout: ${timeoutSec}s)...`);
+  console.log("=".repeat(65));
+
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const timer = setTimeout(() => {
+      rl.close();
+      console.log("\n[Manual OTP] Timed out waiting for terminal OTP input.");
+      resolve(null);
+    }, timeoutSec * 1000);
+
+    rl.question(`[Enter OTP for ${email}]: `, (answer) => {
+      clearTimeout(timer);
+      rl.close();
+      const code = (answer || "").replace(/\D/g, "").trim();
+      resolve(code || null);
+    });
+  });
+}
+
 // ----------------------------------------------------
 // OTP Challenge Handler
 // ----------------------------------------------------
@@ -1137,8 +1164,13 @@ async function handleOtpChallenge(page, targetEmail, cId, rToken, sessionStartTi
     console.log(`[Facebook] No automatic inbox access configured for ${targetEmail}. Please check your email manually.`);
   }
 
-  const otp = otpData ? (typeof otpData === "object" ? otpData.otp : otpData) : null;
+  let otp = otpData ? (typeof otpData === "object" ? otpData.otp : otpData) : null;
   const thread = otpData && otpData.thread ? otpData.thread : null;
+
+  if (!otp) {
+    console.log(`[Facebook] Automated inbox polling returned no code for ${targetEmail}. Prompting for terminal entry...`);
+    otp = await promptTerminalOtp(targetEmail, 180);
+  }
 
   if (otp) {
     console.log(`[Facebook] >>> ENTERING 5-DIGIT OTP: ${otp} <<<`);

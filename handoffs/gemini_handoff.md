@@ -7,6 +7,17 @@ This document logs all architectural decisions, code changes, pipeline updates, 
 
 ## Session History & Major Changes
 
+### [2026-11-18] Suspension State Detection & Terminal Manual OTP Fallback
+1. **Instagram Account Suspension Handling**:
+   - Added `isSuspendedScreen` and `markInstagramAccountSuspended` across [`tools/instagram_signup_camoufox.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/instagram_signup_camoufox.mjs).
+   - Detects `/accounts/suspended/` URLs and suspension notice texts immediately post-OTP and during manual hold loops.
+   - Automatically marks account status as `SUSPENDED` with `is_suspended: true`, `suspended_at`, and `suspension_url` in both `instagram_registered_accounts.json` and profile `account_info.json`.
+   - Aborts feed warmup, profile setup, and 2FA when suspension is encountered.
+2. **Terminal Interactive OTP Prompt & `--email` CLI Priority**:
+   - Fixed `--email` flag priority so specifying an explicit custom email is not overwritten by `DEFAULT_ACCOUNT`.
+   - Added interactive `promptTerminalOtp` fallback via `node:readline` across both [`tools/facebook_signup_camoufox.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/facebook_signup_camoufox.mjs) and [`tools/instagram_signup_camoufox.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/instagram_signup_camoufox.mjs).
+   - When OAuth mailbox access is unavailable (e.g. custom domain `@cbsed.us`) or automated polling yields no code, the script prompts the user directly in the terminal, types the user-supplied code via `humanType`, and submits confirmation.
+
 ### [2026-11-18] Verification of DeepSeek Handoff & Facebook Pipeline Synchronization
 1. **Verification of DeepSeek Findings**:
    - Reviewed `handoffs/deepseek_handoff.md` (`UA/session parser/proxy fail-closed fixes`).
