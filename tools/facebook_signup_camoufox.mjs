@@ -635,9 +635,27 @@ async function humanType(page, locator, text, options = {}) {
 async function safeGoto(page, url, options = { waitUntil: "domcontentloaded", timeout: 45000 }, maxRetries = 3) {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      return await page.goto(url, options);
+      const resp = await page.goto(url, options);
+      const curUrl = page.url() || "";
+      if (curUrl.startsWith("about:neterror") || curUrl.startsWith("about:certerror")) {
+        console.warn(`[Navigation] Landed on browser network error (${curUrl}). Clicking 'Try Again'...`);
+        const tryAgainBtn = page.locator("#errorTryAgain, button:has-text('Try Again')").first();
+        if ((await tryAgainBtn.count()) > 0) {
+          await tryAgainBtn.click().catch(() => {});
+          await page.waitForTimeout(4000);
+        }
+      }
+      return resp;
     } catch (err) {
       console.warn(`[Navigation] Attempt ${attempt} failed for ${url}: ${err.message}`);
+      try {
+        const tryAgainBtn = page.locator("#errorTryAgain, button:has-text('Try Again')").first();
+        if ((await tryAgainBtn.count()) > 0 && (await tryAgainBtn.isVisible().catch(() => false))) {
+          console.log("[Navigation] Clicking 'Try Again' button on network error screen...");
+          await tryAgainBtn.click().catch(() => {});
+          await page.waitForTimeout(4000);
+        }
+      } catch (e) {}
       if (RISK && RISK.proxy && RISK.proxy.strict_sticky
         && /502|bad gateway|proxy_connection_refused|proxy authentication|tunnel/i.test(err.message || "")) {
         throw new Error("[Risk] Bound proxy session failed (502/proxy refused); aborting instead of rotating to a new IP.");
@@ -1982,6 +2000,9 @@ async function run() {
       "browser.urlbar.suggest.bookmark": true,
       "browser.urlbar.suggest.history": true,
       "browser.urlbar.suggest.topsites": true,
+      "network.trr.mode": 5, // Disable DoH to prevent residential proxy DNS resolution failures
+      "network.proxy.socks_remote_dns": true,
+      "network.http.connection-retry-timeout": 1500,
     },
     webgl_config: persona.webgl_config || undefined,
     i_know_what_im_doing: true,
@@ -2183,6 +2204,17 @@ async function run() {
       for (let attempt = 1; attempt <= maxFormLoadAttempts; attempt++) {
         const susp = await isFacebookSuspendedScreen(page);
         if (susp.isSuspended) break;
+
+        const curUrl = page.url() || "";
+        if (curUrl.startsWith("about:neterror")) {
+          console.warn("[Facebook] Browser is on network error page. Clicking 'Try Again'...");
+          const tryAgain = page.locator("#errorTryAgain, button:has-text('Try Again')").first();
+          if ((await tryAgain.count()) > 0) {
+            await tryAgain.click().catch(() => {});
+            await page.waitForTimeout(4000);
+            continue;
+          }
+        }
 
         const candidate = page.locator("input[name='firstname']:visible, input[aria-label*='First name' i]:visible, input[placeholder*='First name' i]:visible, input[type='text']:visible").first();
         if ((await candidate.count()) > 0 && (await candidate.isVisible().catch(() => false))) {

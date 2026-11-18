@@ -7,6 +7,17 @@ This document logs all architectural decisions, code changes, pipeline updates, 
 
 ## Session History & Major Changes
 
+### [2026-11-18] Fix Firefox / Camoufox "Unable to Connect" Network Error Recovery & DoH Disablement
+1. **Root Cause**:
+   - The Firefox "Unable to connect / Camoufox can't connect to the server at www.facebook.com" (`about:neterror?e=connectionFailure`) occurs due to:
+     - Residential proxy single-node blips (`sessid_oneip` drops connection when the residential peer momentarily sleeps or drops TCP).
+     - Firefox default DNS over HTTPS (DoH) resolver queries (`network.trr.mode`) failing through residential proxies that block port 53 / DoH UDP/TCP.
+     - 30-minute Oxylabs session expiration when an account seed is re-run past its 30-minute allocation.
+2. **Resolution & Hardening**:
+   - Disabled DNS over HTTPS (`"network.trr.mode": 5`) and enforced `"network.proxy.socks_remote_dns": true` across `facebook_signup_camoufox.mjs`, `setup_facebook_2fa.mjs`, and `open_fb_profile.mjs`.
+   - Updated `safeGoto` and `ensureRegistrationInputsReady` to detect Firefox `about:neterror` and click `#errorTryAgain` (the native "Try Again" button) automatically to re-establish the connection.
+
+
 ### [2026-11-18] Facebook Registration Form Auto-Refresh & Anti-Timeout Loop
 1. **Instruction & Issue**:
    - The user reported: `locator.waitFor: Timeout 15000ms exceeded waiting for locator('input[type=\'text\']:visible').first() to be visible` while typing name on registration landing.

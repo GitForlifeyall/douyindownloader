@@ -244,6 +244,8 @@ const browserConfig = {
     "browser.urlbar.suggest.bookmark": true,
     "browser.urlbar.suggest.history": true,
     "browser.urlbar.suggest.topsites": true,
+    "network.trr.mode": 5,
+    "network.proxy.socks_remote_dns": true,
   },
   geoip: true,
   fingerprint,

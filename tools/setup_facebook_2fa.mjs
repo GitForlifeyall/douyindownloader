@@ -996,6 +996,8 @@ if (process.argv[1] && (process.argv[1].endsWith("setup_facebook_2fa.mjs") || pr
       "intl.accept_languages": "en-US, en",
       "javascript.use_us_english_locale": true,
       "browser.toolbars.bookmarks.visibility": "always",
+      "network.trr.mode": 5,
+      "network.proxy.socks_remote_dns": true,
     },
   };
 
