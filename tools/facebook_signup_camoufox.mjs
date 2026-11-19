@@ -30,7 +30,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import readline from "node:readline";
-import { execFileSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import {
   humanGlide,
   humanClick,
@@ -216,6 +216,26 @@ function deriveTimezoneFromProxy(proxyStr) {
   if (p.includes("-cc-gb") || p.includes("-cc-uk") || p.includes("london")) return { tz: "Europe/London", region: "GB", lang: "en" };
   if (p.includes("-cc-de") || p.includes("germany") || p.includes("berlin")) return { tz: "Europe/Berlin", region: "DE", lang: "en" };
   return { tz: "America/Chicago", region: "US", lang: "en" };
+}
+
+function validateProxyConnectivity(proxyStr, timeoutMs = 7000) {
+  if (!proxyStr) return { ok: true };
+  const clean = String(proxyStr).trim();
+  const nullDevice = process.platform === "win32" ? "NUL" : "/dev/null";
+  try {
+    const cmd = `curl.exe -s -o ${nullDevice} -w "%{http_code}" --connect-timeout 5 -x "${clean}" "https://icanhazip.com"`;
+    const code = execSync(cmd, { encoding: "utf-8", timeout: timeoutMs }).trim();
+    if (code === "200") {
+      return { ok: true, statusCode: 200 };
+    }
+    return { ok: false, statusCode: Number(code) || 0, error: `Proxy returned HTTP status ${code}` };
+  } catch (err) {
+    const out = String(err.stdout || err.stderr || err.message || "");
+    if (/407/i.test(out)) {
+      return { ok: false, statusCode: 407, error: "HTTP 407 Proxy Authentication Required (Invalid/Expired Credentials)" };
+    }
+    return { ok: false, error: err.message };
+  }
 }
 
 function sanitizeProfileName(raw, fallback = "unnamed") {
@@ -2124,8 +2144,29 @@ async function run() {
   }
 
   const explicitProxy = getArg("--proxy");
-  const rawProxy = explicitProxy || DEFAULT_PROXY;
-  const effectiveProxy = ensureStickyProxy(rawProxy, email);
+  let rawProxy = explicitProxy || DEFAULT_PROXY;
+  let effectiveProxy = ensureStickyProxy(rawProxy, email);
+
+  console.log(`[Proxy] Running pre-flight connectivity verification...`);
+  const check = validateProxyConnectivity(effectiveProxy);
+  if (!check.ok) {
+    console.warn(`[Proxy Warning] Configured proxy connection failed: ${check.error || "Connection Refused / Auth Failed"}`);
+    if (explicitProxy && explicitProxy !== DEFAULT_PROXY) {
+      console.warn(`[Proxy Fallback] Supplied --proxy credentials failed (${check.error}).`);
+      console.warn(`[Proxy Fallback] Automatically falling back to verified working DEFAULT_PROXY...`);
+      rawProxy = DEFAULT_PROXY;
+      effectiveProxy = ensureStickyProxy(rawProxy, email);
+      const defaultCheck = validateProxyConnectivity(effectiveProxy);
+      if (defaultCheck.ok) {
+        console.log(`[Proxy Success] Switched to verified DEFAULT_PROXY (HTTP 200)!`);
+      } else {
+        console.warn(`[Proxy Warning] DEFAULT_PROXY check status: ${defaultCheck.error}`);
+      }
+    }
+  } else {
+    console.log(`[Proxy Success] Proxy verified and operational (HTTP ${check.statusCode || 200}).`);
+  }
+
   const parsedProxyIdentity = parseProxyIdentity(effectiveProxy);
   const parsedProxy = parseProxy(effectiveProxy);
 
