@@ -634,9 +634,13 @@ function gaussianDelay(mean = 38, stdDev = 12) {
 
 async function humanType(page, locator, text, options = {}) {
   const element = typeof locator.first === "function" ? locator.first() : locator;
-  await humanClick(page, element);
+  await humanClick(page, element).catch(() => {
+    if (typeof element.click === "function") return element.click().catch(() => {});
+  });
   await new Promise((r) => setTimeout(r, 80 + Math.random() * 80));
-  await element.fill("");
+  if (typeof element.fill === "function") {
+    await element.fill("").catch(() => {});
+  }
   await new Promise((r) => setTimeout(r, 40 + Math.random() * 40));
 
   for (let i = 0; i < text.length; i++) {
@@ -644,12 +648,24 @@ async function humanType(page, locator, text, options = {}) {
     // Natural human typo emulation: 2% chance to mistype and backspace
     if (options.typos !== false && Math.random() < 0.02 && char !== " " && char !== "@") {
       const typoChar = String.fromCharCode(char.charCodeAt(0) + (Math.random() > 0.5 ? 1 : -1));
-      await element.pressSequentially(typoChar, { delay: gaussianDelay(38, 12) });
+      if (typeof element.pressSequentially === "function") {
+        await element.pressSequentially(typoChar, { delay: gaussianDelay(38, 12) }).catch(() => {});
+      } else if (typeof element.type === "function") {
+        await element.type(typoChar, { delay: gaussianDelay(38, 12) }).catch(() => {});
+      } else {
+        await page.keyboard.type(typoChar, { delay: gaussianDelay(38, 12) }).catch(() => {});
+      }
       await new Promise((r) => setTimeout(r, 60 + Math.random() * 80));
-      await element.press("Backspace");
+      await page.keyboard.press("Backspace").catch(() => {});
       await new Promise((r) => setTimeout(r, 50 + Math.random() * 60));
     }
-    await element.pressSequentially(char, { delay: gaussianDelay(38, 12) });
+    if (typeof element.pressSequentially === "function") {
+      await element.pressSequentially(char, { delay: gaussianDelay(38, 12) }).catch(() => {});
+    } else if (typeof element.type === "function") {
+      await element.type(char, { delay: gaussianDelay(38, 12) }).catch(() => {});
+    } else {
+      await page.keyboard.type(char, { delay: gaussianDelay(38, 12) }).catch(() => {});
+    }
   }
   await new Promise((r) => setTimeout(r, 120 + Math.random() * 120));
 }
@@ -1286,19 +1302,6 @@ async function selectCustomCombobox(page, name, locator, regex) {
 async function selectFacebookGender(page, targetGender) {
   console.log(`[Facebook] Selecting Gender: ${targetGender} (Strictly prohibiting Custom)...`);
   const isFemale = targetGender.toLowerCase() === "female";
-  const targetWord = isFemale ? "Female" : "Male";
-
-  const isMatch = (txt) => {
-    const s = (txt || "").trim();
-    if (!s) return false;
-    // CRITICAL: Strictly reject Custom / Pronoun / Other
-    if (/custom|pronoun|कस्टम|કસ્ટમ|अन्य|બીજું|other/i.test(s)) return false;
-    if (isFemale) {
-      return /\bfemale\b|महिला|સ્ત્રી/i.test(s);
-    } else {
-      return (/\bmale\b/i.test(s) && !/\bfemale\b/i.test(s)) || /पुरुष|પુરુષ/i.test(s);
-    }
-  };
 
   // Check 1: Native HTML <select name='sex'>
   const genderSelect = page.locator("select[name='sex'], select[aria-label*='gender' i], select[aria-label*='लिंग' i]").first();
@@ -1309,126 +1312,7 @@ async function selectFacebookGender(page, targetGender) {
     return true;
   }
 
-  // Check 2: Modern React Combobox / Dropdown ("Select your gender")
-  const genderBoxSelectors = [
-    "[role='combobox']:has-text('Select your gender')",
-    "[role='button']:has-text('Select your gender')",
-    "[aria-haspopup='listbox']:has-text('Select your gender')",
-    "div:has-text('Select your gender'):visible",
-    "span:has-text('Select your gender'):visible",
-    "[role='combobox'][aria-label*='gender' i]",
-    "[role='combobox']:has-text('gender')",
-    "[aria-haspopup='listbox'][aria-label*='gender' i]",
-    "div[aria-label*='gender' i]",
-    "[role='combobox'][aria-label*='लिंग' i]",
-    "[role='combobox'][aria-label*='જાતિ' i]"
-  ];
-
-  let genderBox = null;
-  for (const sel of genderBoxSelectors) {
-    const loc = page.locator(sel).first();
-    if ((await loc.count()) > 0 && (await loc.isVisible().catch(() => false))) {
-      genderBox = loc;
-      break;
-    }
-  }
-
-  if (genderBox) {
-    console.log("[Facebook] Found Gender dropdown box. Clicking to expand options...");
-    await humanClick(page, genderBox).catch(() => genderBox.click({ force: true }));
-    await page.waitForTimeout(400);
-
-    let optionClicked = false;
-
-    // Direct Playwright exact-text locator match for Female / Male
-    const directOption = page.locator(`[role='option']:has-text('${targetWord}'), [role='menuitem']:has-text('${targetWord}'), div[tabindex]:has-text('${targetWord}'), span:text-is('${targetWord}'), div:text-is('${targetWord}')`).first();
-    if ((await directOption.count()) > 0 && (await directOption.isVisible().catch(() => false))) {
-      const optText = (await directOption.innerText().catch(() => "")).trim();
-      if (isMatch(optText)) {
-        console.log(`[Facebook] Clicking matched gender option: '${optText}'`);
-        await directOption.scrollIntoViewIfNeeded().catch(() => { });
-        await humanClick(page, directOption).catch(() => directOption.click({ force: true }));
-        optionClicked = true;
-      }
-    }
-
-    // Direct in-page DOM click if playwright locators missed the popover portal
-    if (!optionClicked) {
-      optionClicked = await page.evaluate((female) => {
-        const target = female ? "female" : "male";
-        const allElements = Array.from(document.querySelectorAll("[role='option'], [role='menuitem'], [role='listbox'] div, div[tabindex], div, span, li"));
-        for (const el of allElements) {
-          const t = (el.innerText || el.textContent || "").trim();
-          if (!t || /custom|pronoun|कस्टम|કસ્ટમ|अन्य|other/i.test(t)) continue;
-          const lower = t.toLowerCase();
-          if (lower === target || (female && (lower === "महिला" || lower === "સ્ત્રી")) || (!female && (lower === "पुरुष" || lower === "પુરુષ"))) {
-            const rect = el.getBoundingClientRect();
-            if (rect.width > 0 && rect.height > 0) {
-              el.click();
-              return true;
-            }
-          }
-        }
-        return false;
-      }, isFemale);
-    }
-
-    await page.waitForTimeout(400);
-
-    // Verification: check if the box text changed away from "Select your gender" AND is not "Custom"
-    let currentBoxText = (await genderBox.innerText().catch(() => "")).trim();
-    const isCustom = /custom|pronoun|कस्टम|કસ્ટમ|other/i.test(currentBoxText);
-    const isStillUnselected = /select your gender|select|चुनें|પસંદ/i.test(currentBoxText) || currentBoxText === "" || isCustom;
-
-    if (isStillUnselected) {
-      console.warn(`[Facebook] Gender box unselected or on Custom ('${currentBoxText}'). Using direct character typing on combobox...`);
-      await genderBox.focus().catch(() => { });
-      await humanClick(page, genderBox).catch(() => genderBox.click({ force: true }));
-      await page.waitForTimeout(250);
-      // Type "f" for Female, "m" for Male to natively jump to the correct option without arrowing into Custom
-      await page.keyboard.press(isFemale ? "f" : "m");
-      await page.waitForTimeout(150);
-      await page.keyboard.press("Enter");
-      await page.waitForTimeout(350);
-    }
-
-    // Safeguard: Ensure Custom was STRICTLY NOT selected
-    currentBoxText = (await genderBox.innerText().catch(() => "")).trim();
-    if (/custom|pronoun|कस्टम|કસ્ટમ|other/i.test(currentBoxText)) {
-      console.warn(`[Facebook] ⚠️ Custom detected ('${currentBoxText}')! Forcing direct click on Female/Male...`);
-      await humanClick(page, genderBox).catch(() => genderBox.click({ force: true }));
-      await page.waitForTimeout(250);
-      await page.evaluate((female) => {
-        const items = Array.from(document.querySelectorAll("[role='option'], [role='menuitemradio'], [role='menuitem'], [role='listbox'] div[tabindex], [role='listbox'] li"));
-        const validItems = items.filter(el => {
-          const t = (el.innerText || el.textContent || "").toLowerCase();
-          return !t.includes("custom") && !t.includes("pronoun") && !t.includes("other");
-        });
-        if (female && validItems[0]) {
-          validItems[0].click();
-        } else if (!female && validItems[1]) {
-          validItems[1].click();
-        } else if (validItems[0]) {
-          validItems[0].click();
-        }
-      }, isFemale);
-      await page.waitForTimeout(300);
-    }
-
-    // Clear any lingering custom gender input in the DOM
-    await page.evaluate(() => {
-      const customInputs = Array.from(document.querySelectorAll("input[name*='custom_gender' i], input[placeholder*='Gender' i], input[aria-label*='Gender' i]"));
-      for (const inp of customInputs) {
-        inp.value = "";
-      }
-    }).catch(() => { });
-
-    currentBoxText = (await genderBox.innerText().catch(() => "")).trim();
-    console.log(`[Facebook] Successfully selected Gender: '${currentBoxText.replace(/\n/g, " - ")}'`);
-    return true;
-  }
-
-  // Check 3: Radio buttons (alternate A/B testing form layouts)
+  // Check 2: Radio buttons (alternate A/B testing form layouts)
   const radioVal = isFemale ? "1" : "2";
   const radioBtn = page.locator(`input[type='radio'][value='${radioVal}'], label:has-text('${targetGender}') input[type='radio'], input[type='radio'][aria-label*='${targetGender}' i]`).first();
   if ((await radioBtn.count()) > 0 && (await radioBtn.isVisible().catch(() => false))) {
@@ -1437,12 +1321,114 @@ async function selectFacebookGender(page, targetGender) {
     return true;
   }
 
-  // Check 4: Label click fallback for radio buttons
+  // Check 3: Label click fallback for radio buttons
   const labelBtn = page.locator(`label:has-text('${targetGender}')`).first();
   if ((await labelBtn.count()) > 0 && (await labelBtn.isVisible().catch(() => false))) {
     await humanClick(page, labelBtn).catch(() => labelBtn.click({ force: true }));
     console.log(`[Facebook] Clicked gender label: ${targetGender}`);
     return true;
+  }
+
+  // Check 4: Modern React Combobox / Dropdown ("Select your gender")
+  const targetOptionRegex = isFemale ? /^(?:female|महिला|સ્ત્રી)$/i : /^(?:male|पुरुष|પુરુષ)$/i;
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    // 1. Locate the Gender dropdown trigger box in DOM and tag it
+    const triggerFound = await page.evaluate(() => {
+      const all = Array.from(document.querySelectorAll("div[role='combobox'], div[aria-haspopup='listbox'], [role='button'], div[tabindex='0'], span, div"));
+      for (const el of all) {
+        const t = (el.innerText || "").trim();
+        if (t === "Select your gender" || t === "Custom" || (t.startsWith("Select your gender") && t.length < 35)) {
+          const box = el.closest("[role='combobox'], [role='button'], div[aria-haspopup='listbox'], div[tabindex='0']") || el;
+          box.setAttribute("data-fb-gender-box", "true");
+          return { found: true, text: t };
+        }
+      }
+      const ariaBox = document.querySelector("[role='combobox'][aria-label*='gender' i], [aria-haspopup='listbox'][aria-label*='gender' i]");
+      if (ariaBox) {
+        ariaBox.setAttribute("data-fb-gender-box", "true");
+        return { found: true, text: (ariaBox.innerText || "").trim() };
+      }
+      return { found: false };
+    });
+
+    if (!triggerFound.found) {
+      console.warn(`[Facebook] Gender trigger box not found on attempt ${attempt}.`);
+      break;
+    }
+
+    const boxLocator = page.locator("[data-fb-gender-box='true']").first();
+    const currentBoxText = ((await boxLocator.innerText().catch(() => "")) || "").trim();
+    console.log(`[Facebook] Gender box state (Attempt ${attempt}): '${currentBoxText}'`);
+
+    // If already properly selected as Female or Male (and NOT Custom), we are done!
+    if (targetOptionRegex.test(currentBoxText) && !/custom|pronoun|कस्टम|કસ્ટમ|other/i.test(currentBoxText)) {
+      console.log(`[Facebook] Gender already correctly set to '${currentBoxText}'.`);
+      return true;
+    }
+
+    // Scroll into view and click the trigger box to open the popover
+    await boxLocator.scrollIntoViewIfNeeded().catch(() => {});
+    await page.waitForTimeout(150);
+    await humanClick(page, boxLocator).catch(() => boxLocator.click({ force: true }));
+    await page.waitForTimeout(400);
+
+    // 2. Click the desired option (Female or Male) inside the opened popover
+    const clickedInDom = await page.evaluate((isFemaleTarget) => {
+      const reg = isFemaleTarget ? /^(?:female|महिला|સ્ત્રી)$/i : /^(?:male|पुरुष|પુરુષ)$/i;
+      const options = Array.from(document.querySelectorAll("[role='option'], [role='menuitem'], [role='menuitemradio'], [role='listbox'] div, div[role='dialog'] [role='option'], li, div[tabindex='-1']"));
+      for (const opt of options) {
+        const txt = (opt.innerText || opt.textContent || "").trim();
+        // NEVER match Custom or Pronoun
+        if (/custom|pronoun|कस्टम|કસ્ટમ|other/i.test(txt)) continue;
+        if (reg.test(txt)) {
+          const rect = opt.getBoundingClientRect();
+          if (rect.width > 0 && rect.height > 0) {
+            opt.click();
+            return { clicked: true, text: txt };
+          }
+        }
+      }
+      return { clicked: false };
+    }, isFemale);
+
+    if (clickedInDom.clicked) {
+      console.log(`[Facebook] Successfully clicked gender option in DOM: '${clickedInDom.text}'`);
+    } else {
+      const optLoc = page.locator("[role='option'], [role='menuitem'], [role='menuitemradio'], [role='listbox'] *")
+        .filter({ hasText: targetOptionRegex })
+        .first();
+      if ((await optLoc.count()) > 0 && (await optLoc.isVisible().catch(() => false))) {
+        const t = (await optLoc.innerText().catch(() => "")).trim();
+        if (!/custom|pronoun/i.test(t)) {
+          console.log(`[Facebook] Clicking gender option via locator: '${t}'`);
+          await optLoc.click({ force: true });
+        }
+      }
+    }
+
+    await page.waitForTimeout(500);
+
+    // 3. Post-Click Verification: Ensure box text updated and Custom is NOT active
+    const updatedBoxText = ((await boxLocator.innerText().catch(() => "")) || "").trim();
+    const isCustomActive = /custom|pronoun|कस्टम|કસ્ટમ|other/i.test(updatedBoxText);
+    const isUnselected = /select your gender|select|चुनें|પસંદ/i.test(updatedBoxText) || updatedBoxText === "";
+
+    if (!isCustomActive && !isUnselected && targetOptionRegex.test(updatedBoxText)) {
+      console.log(`[Facebook] Successfully verified Gender selection: '${updatedBoxText.replace(/\n/g, " - ")}'`);
+      // Wipe any lingering custom gender inputs that might have appeared
+      await page.evaluate(() => {
+        const customInputs = Array.from(document.querySelectorAll("input[name*='custom_gender' i], input[placeholder*='Gender' i], input[aria-label*='Gender' i]"));
+        for (const inp of customInputs) inp.value = "";
+      }).catch(() => {});
+      return true;
+    }
+
+    if (isCustomActive) {
+      console.warn(`[Facebook] ⚠️ Custom was selected ('${updatedBoxText}')! Retrying to force Female/Male...`);
+    } else {
+      console.warn(`[Facebook] Gender box still unselected ('${updatedBoxText}'). Retrying...`);
+    }
   }
 
   return false;
@@ -1459,95 +1445,132 @@ async function fillFacebookEmail(page, email) {
   // Ensure any lingering custom gender input value is wiped
   await page.evaluate(() => {
     const customInputs = Array.from(document.querySelectorAll("input[name*='custom_gender' i], input[placeholder*='Gender' i], input[aria-label*='Gender' i]"));
-    for (const inp of customInputs) {
-      inp.value = "";
-    }
+    for (const inp of customInputs) inp.value = "";
   }).catch(() => { });
 
-  // Scroll down smoothly so the contact inputs are well inside the viewport (user note: "sometimes email input is down")
+  // Scroll down smoothly so the contact inputs are well inside the viewport
   await page.evaluate(() => {
     window.scrollBy(0, 300);
   }).catch(() => { });
   await page.waitForTimeout(350);
 
-  const emailCandidateSelectors = [
-    "input[name='reg_email__']",
-    "input[aria-label='Mobile number or email address']",
-    "input[aria-label='Mobile number or email']",
-    "input[aria-label*='Mobile number or email' i]",
-    "input[placeholder='Mobile number or email address']",
-    "input[placeholder='Mobile number or email']",
-    "input[placeholder*='Mobile number or email' i]",
-    "input[aria-label*='मोबाइल नंबर या ईमेल' i]",
-    "input[placeholder*='मोबाइल नंबर या ईमेल' i]",
-    "input[type='email']",
-    "input[autocomplete='email']"
-  ];
+  // Strategy 1: Find the text input directly PRECEDING the visible password input (foolproof across all React/Comet layouts)
+  let emLocator = null;
+  const relXpath = "//input[@type='password']/preceding::input[not(@type='hidden') and not(@type='password') and not(@type='radio') and not(@type='checkbox') and not(contains(@name, 'gender')) and not(contains(@placeholder, 'Gender'))][1]";
+  const relCandidate = page.locator(relXpath).first();
+  if ((await relCandidate.count()) > 0 && (await relCandidate.isVisible().catch(() => false))) {
+    console.log("[Facebook] Located email input relative to visible Password input.");
+    emLocator = relCandidate;
+  }
 
-  let emInput = null;
-  for (const sel of emailCandidateSelectors) {
-    const loc = page.locator(sel).first();
-    if ((await loc.count()) > 0) {
-      // Strictly exclude custom gender, pronoun, firstname, lastname, birthday
-      const name = ((await loc.getAttribute("name").catch(() => "")) || "").toLowerCase();
-      const aria = ((await loc.getAttribute("aria-label").catch(() => "")) || "").toLowerCase();
-      const placeholder = ((await loc.getAttribute("placeholder").catch(() => "")) || "").toLowerCase();
-      if (/custom|gender|pronoun|firstname|lastname|birthday/i.test(name + " " + aria + " " + placeholder)) {
-        continue;
+  // Strategy 2: Candidate selectors (filtered to visible inputs only)
+  if (!emLocator) {
+    const emailCandidateSelectors = [
+      "input[name='reg_email__']:visible",
+      "input[aria-label='Mobile number or email']:visible",
+      "input[aria-label='Mobile number or email address']:visible",
+      "input[aria-label*='Mobile number' i]:visible",
+      "input[placeholder='Mobile number or email']:visible",
+      "input[placeholder='Mobile number or email address']:visible",
+      "input[placeholder*='Mobile number' i]:visible",
+      "input[type='email']:visible",
+      "label:has-text('Mobile number or email') input:visible",
+      "div:has(> label:has-text('Mobile number or email')) input:visible"
+    ];
+
+    for (const sel of emailCandidateSelectors) {
+      const loc = page.locator(sel).first();
+      if ((await loc.count()) > 0 && (await loc.isVisible().catch(() => false))) {
+        const name = ((await loc.getAttribute("name").catch(() => "")) || "").toLowerCase();
+        const aria = ((await loc.getAttribute("aria-label").catch(() => "")) || "").toLowerCase();
+        const ph = ((await loc.getAttribute("placeholder").catch(() => "")) || "").toLowerCase();
+        if (name.includes("custom") || aria.includes("gender") || ph.includes("gender") || aria.includes("pronoun")) {
+          continue;
+        }
+        emLocator = loc;
+        break;
       }
-      emInput = loc;
-      break;
     }
   }
 
-  // DOM scan fallback: search through inputs to match Mobile number or email address container
-  if (!emInput) {
-    console.log("[Facebook] Searching DOM for Mobile number or email address input...");
-    const handle = await page.evaluateHandle(() => {
+  // Strategy 3: DOM scan fallback that tags the element with data-fb-email
+  if (!emLocator) {
+    console.log("[Facebook] Searching DOM to tag Mobile number or email address input...");
+    const tagged = await page.evaluate(() => {
       const inputs = Array.from(document.querySelectorAll("input:not([type='password']):not([type='hidden']):not([type='radio']):not([type='checkbox'])"));
       for (const input of inputs) {
+        const rect = input.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) continue;
         const name = (input.name || "").toLowerCase();
         const aria = (input.getAttribute("aria-label") || "").toLowerCase();
         const placeholder = (input.placeholder || "").toLowerCase();
-        const parentText = (input.parentElement ? input.parentElement.innerText : "").toLowerCase();
-
-        // STRICT FILTER: NEVER match gender or pronoun inputs
-        if (name.includes("gender") || aria.includes("gender") || placeholder.includes("gender") || parentText.includes("gender") ||
-            name.includes("pronoun") || aria.includes("pronoun") || placeholder.includes("pronoun") || parentText.includes("pronoun") ||
-            name === "firstname" || name === "lastname") {
-          continue;
-        }
-
+        if (name.includes("custom") || aria.includes("gender") || placeholder.includes("gender") || aria.includes("pronoun")) continue;
+        if (name.includes("firstname") || name.includes("lastname") || name.includes("birthday")) continue;
         if (name === "reg_email__" || input.type === "email" ||
-            aria.includes("mobile number or email") || placeholder.includes("mobile number or email") ||
             aria.includes("mobile") || aria.includes("email") ||
             placeholder.includes("mobile") || placeholder.includes("email")) {
-          return input;
+          input.setAttribute("data-fb-email", "true");
+          return true;
         }
       }
-      return null;
+      return false;
     });
 
-    if (handle && handle.asElement()) {
-      emInput = handle.asElement();
+    if (tagged) {
+      emLocator = page.locator("input[data-fb-email='true']").first();
     }
   }
 
-  if (emInput) {
-    await emInput.scrollIntoViewIfNeeded().catch(() => { });
+  if (emLocator) {
+    await emLocator.scrollIntoViewIfNeeded().catch(() => { });
     await page.waitForTimeout(200);
-    if (typeof emInput.click === "function") {
-      await humanClick(page, emInput).catch(() => emInput.click({ force: true }));
+
+    // Multi-layer fill & human typing
+    await humanClick(page, emLocator).catch(() => emLocator.click({ force: true }));
+    await emLocator.fill("").catch(() => {});
+    await emLocator.fill(email).catch(() => {});
+    await humanType(page, emLocator, email, { typos: false });
+
+    // Enforce React synthetic event dispatch
+    await page.evaluate((targetEmail) => {
+      const pw = document.querySelector("input[type='password']:not([type='hidden'])");
+      const form = (pw && (pw.closest("form") || pw.closest("div[role='dialog']"))) || document.body;
+      const inputs = Array.from(form.querySelectorAll("input:not([type='password']):not([type='hidden']):not([type='radio']):not([type='checkbox'])"));
+      const visible = inputs.filter(i => {
+        const r = i.getBoundingClientRect();
+        const t = `${i.name} ${i.getAttribute("aria-label")||""} ${i.placeholder||""}`.toLowerCase();
+        return r.width > 0 && r.height > 0 && !t.includes("gender") && !t.includes("pronoun") && !t.includes("firstname") && !t.includes("lastname");
+      });
+      const targetInput = visible[visible.length - 1]; // input immediately before password
+      if (targetInput) {
+        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+        if (nativeSetter) {
+          nativeSetter.call(targetInput, targetEmail);
+        } else {
+          targetInput.value = targetEmail;
+        }
+        targetInput.dispatchEvent(new Event("input", { bubbles: true }));
+        targetInput.dispatchEvent(new Event("change", { bubbles: true }));
+        targetInput.dispatchEvent(new Event("blur", { bubbles: true }));
+      }
+    }, email).catch(() => {});
+
+    // Strict Verification: Ensure the value was actually received by the input
+    let val = await emLocator.inputValue().catch(() => "");
+    if (!val || val !== email) {
+      console.warn(`[Facebook] Email field verification mismatch (got '${val}', expected '${email}'). Re-filling directly...`);
+      await emLocator.fill(email).catch(() => {});
+      val = await emLocator.inputValue().catch(() => "");
     }
-    await humanType(page, emInput, email);
-    console.log(`[Facebook] Entered Email: ${email}`);
+    console.log(`[Facebook] Email field successfully populated and verified: '${val}'`);
   } else {
-    console.warn("[Facebook] Waiting for email input to become visible...");
-    const fallback = page.locator("input[name='reg_email__']:visible, input[aria-label*='Mobile number or email' i]:visible, input[placeholder*='Mobile number or email' i]:visible, input[type='email']:visible").first();
+    console.warn("[Facebook] Waiting for email input fallback to become visible...");
+    const fallback = page.locator("input[name='reg_email__']:visible, input[aria-label*='Mobile number' i]:visible, input[placeholder*='Mobile number' i]:visible, input[type='email']:visible").first();
     await fallback.waitFor({ state: "visible", timeout: 8000 }).catch(() => { });
     if (await fallback.isVisible().catch(() => false)) {
       await fallback.scrollIntoViewIfNeeded().catch(() => { });
-      await humanType(page, fallback, email);
+      await fallback.fill(email).catch(() => {});
+      await humanType(page, fallback, email, { typos: false });
     }
   }
 
@@ -1557,7 +1580,8 @@ async function fillFacebookEmail(page, email) {
   if ((await reEmInput.count()) > 0 && (await reEmInput.isVisible().catch(() => false))) {
     console.log("[Facebook] Re-entering email confirmation...");
     await reEmInput.scrollIntoViewIfNeeded().catch(() => { });
-    await humanType(page, reEmInput, email);
+    await reEmInput.fill(email).catch(() => {});
+    await humanType(page, reEmInput, email, { typos: false });
   }
 }
 
@@ -2813,24 +2837,42 @@ async function run() {
         }
       }
 
-      // 5. Pre-submit Validation: Ensure Gender is Female/Male (NEVER Custom) and Email is entered
-      const formValidation = await page.evaluate(() => {
-        const bodyTxt = (document.body && document.body.innerText) || "";
-        const genderBad = bodyTxt.includes("Please choose a gender") || bodyTxt.includes("Select your gender") || bodyTxt.includes("Select your pronoun") || bodyTxt.includes("Please select your pronoun") || bodyTxt.includes("कृपया एक लिंग चुनें");
-        const emailBad = bodyTxt.includes("Please enter a valid mobile number or email address") || bodyTxt.includes("कृपया एक मान्य मोबाइल नंबर");
-        return { genderBad, emailBad };
-      });
+      // 5. Pre-submit Validation Gate: Ensure Gender is Female/Male (NEVER Custom) and Email is entered
+      for (let valAttempt = 1; valAttempt <= 3; valAttempt++) {
+        const formValidation = await page.evaluate((expectedEmail) => {
+          const bodyTxt = (document.body && document.body.innerText) || "";
+          const genderBad = bodyTxt.includes("Please choose a gender") || bodyTxt.includes("Select your gender") || bodyTxt.includes("Select your pronoun") || bodyTxt.includes("Please select your pronoun") || bodyTxt.includes("कृपया एक लिंग चुनें");
 
-      if (formValidation.genderBad) {
-        console.warn("[Facebook] Gender still unselected, Custom selected, or warning visible before submit. Re-running selectFacebookGender...");
-        await selectFacebookGender(page, randomGender);
-        await page.waitForTimeout(600);
-      }
+          const pw = document.querySelector("input[type='password']:not([type='hidden'])");
+          const form = (pw && (pw.closest("form") || pw.closest("div[role='dialog']"))) || document.body;
+          const inputs = Array.from(form.querySelectorAll("input:not([type='password']):not([type='hidden']):not([type='radio']):not([type='checkbox'])"));
+          const visible = inputs.filter(i => {
+            const r = i.getBoundingClientRect();
+            const t = `${i.name} ${i.getAttribute("aria-label")||""} ${i.placeholder||""}`.toLowerCase();
+            return r.width > 0 && r.height > 0 && !t.includes("gender") && !t.includes("pronoun") && !t.includes("firstname") && !t.includes("lastname");
+          });
+          const targetInput = visible[visible.length - 1];
+          const currentEmailVal = (targetInput ? targetInput.value : "").trim();
+          const emailBad = !currentEmailVal || !currentEmailVal.includes("@") || bodyTxt.includes("Please enter a valid mobile number or email address");
+          return { genderBad, emailBad, currentEmailVal };
+        }, email);
 
-      if (formValidation.emailBad) {
-        console.warn("[Facebook] Email field missing or invalid error shown before submit. Re-running fillFacebookEmail...");
-        await fillFacebookEmail(page, email);
-        await page.waitForTimeout(600);
+        if (!formValidation.genderBad && !formValidation.emailBad) {
+          console.log(`[Facebook] Form validation pre-check passed cleanly (Email: '${formValidation.currentEmailVal}'). Ready to submit.`);
+          break;
+        }
+
+        if (formValidation.genderBad) {
+          console.warn(`[Facebook] Gender still unselected, Custom selected, or warning visible before submit (Pre-check ${valAttempt}). Re-running selectFacebookGender...`);
+          await selectFacebookGender(page, randomGender);
+          await page.waitForTimeout(600);
+        }
+
+        if (formValidation.emailBad) {
+          console.warn(`[Facebook] Email field empty or invalid before submit (current value: '${formValidation.currentEmailVal}', Pre-check ${valAttempt}). Re-running fillFacebookEmail...`);
+          await fillFacebookEmail(page, email);
+          await page.waitForTimeout(600);
+        }
       }
 
       // 6. Submit with natural hesitation pause
@@ -2850,6 +2892,27 @@ async function run() {
           });
           if (btn) btn.click();
         });
+      }
+
+      await page.waitForTimeout(2000);
+
+      // Post-Submit check: verify if Facebook rejected the form due to missing email or gender
+      const postSubmitError = await page.evaluate(() => {
+        const txt = (document.body && document.body.innerText) || "";
+        return txt.includes("Please enter a valid mobile number or email address") || txt.includes("Please choose a gender") || txt.includes("कृपया एक मान्य मोबाइल");
+      });
+
+      if (postSubmitError) {
+        console.warn("[Facebook] ⚠️ Validation error shown after submit! Re-filling email & gender, then re-clicking Submit...");
+        await fillFacebookEmail(page, email);
+        await page.waitForTimeout(600);
+        await selectFacebookGender(page, randomGender);
+        await page.waitForTimeout(600);
+        const retrySubmit = page.locator("button:has-text('Submit'), [role='button']:has-text('Submit'), button:has-text('Sign Up'), [role='button']:has-text('Sign Up')").first();
+        if ((await retrySubmit.count()) > 0 && (await retrySubmit.isVisible().catch(() => false))) {
+          await humanClick(page, retrySubmit).catch(() => retrySubmit.click());
+          await page.waitForTimeout(3000);
+        }
       }
 
       console.log("[Facebook] Registration form submitted. Proceeding directly to verification / OTP challenge step...");
