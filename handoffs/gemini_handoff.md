@@ -33,6 +33,10 @@ This document logs all architectural decisions, code changes, pipeline updates, 
    - **Pre-Submit & Post-Submit Verification Gates**:
      - Added a 3-attempt pre-submit validation loop verifying both that the email input contains `@` and that gender does NOT show unselected or Custom before clicking Submit.
      - Added post-submit error detection to re-fill and re-submit if Facebook raises field errors.
+   - **Post-Submit URL Confirmation to OTP Gate**:
+     - Added an explicit URL polling loop immediately following form submission to verify transition to the OTP challenge (`confirmemail.php`, `checkpoint`, `confirm`).
+     - If `confirmemail.php?next=undefined` is detected, it cleanly redirects to `https://www.facebook.com/confirmemail.php` so the OTP is dispatched without delay.
+     - Confirms either via URL or DOM code input arrival before handing off to `handleOtpChallenge`.
 4. **Verification**:
    - `node --check tools/facebook_signup_camoufox.mjs` and `node --check tools/setup_facebook_2fa.mjs` passed with code 0.
 

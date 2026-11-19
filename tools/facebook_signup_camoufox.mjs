@@ -2915,9 +2915,51 @@ async function run() {
         }
       }
 
+      // Check URL after submit to confirm arrival on OTP page (per user instruction)
+      console.log("[Facebook] Checking URL after submit to confirm transition to OTP / confirmation page...");
+      let confirmedOtpPage = false;
+      for (let waitSec = 1; waitSec <= 20; waitSec++) {
+        const currentUrl = page.url() || "";
+
+        // If confirmemail.php with next=undefined, cleanly redirect immediately
+        if (currentUrl.includes("confirmemail.php") && currentUrl.includes("next=undefined")) {
+          console.log("[Facebook] Confirmed OTP page with 'next=undefined'. Redirecting cleanly to https://www.facebook.com/confirmemail.php so OTP dispatches automatically...");
+          await safeGoto(page, "https://www.facebook.com/confirmemail.php", { waitUntil: "domcontentloaded", timeout: 30000 });
+          await page.waitForTimeout(2000);
+          confirmedOtpPage = true;
+          break;
+        }
+
+        const isOtpUrl = currentUrl.includes("confirmemail") || currentUrl.includes("checkpoint") || currentUrl.includes("confirm") || currentUrl.includes("enter_code");
+        if (isOtpUrl) {
+          console.log(`[Facebook] ✅ Confirmed arrival on OTP / Confirmation page via URL: ${currentUrl}`);
+          confirmedOtpPage = true;
+          break;
+        }
+
+        // Also check if code input or confirmation text has rendered in DOM
+        const hasCodeInput = await page.evaluate(() => {
+          const inp = document.querySelector("input[name='code'], input[placeholder*='code' i], input[aria-label*='code' i]");
+          const bodyTxt = (document.body && document.body.innerText) || "";
+          return Boolean(inp) || bodyTxt.includes("Enter the confirmation code") || bodyTxt.includes("5-digit code") || bodyTxt.includes("पुष्टि कोड");
+        }).catch(() => false);
+
+        if (hasCodeInput) {
+          console.log(`[Facebook] ✅ Confirmed arrival on OTP page via DOM input (URL: ${currentUrl}).`);
+          confirmedOtpPage = true;
+          break;
+        }
+
+        await page.waitForTimeout(1000);
+      }
+
+      if (!confirmedOtpPage) {
+        console.warn(`[Facebook] Note: URL after submit is currently: '${page.url()}'. Passing to handleOtpChallenge for deep polling...`);
+      }
+
       console.log("[Facebook] Registration form submitted. Proceeding directly to verification / OTP challenge step...");
       riskMark("form_submitted");
-      await page.waitForTimeout(2500);
+      await page.waitForTimeout(1500);
     }
 
     // 6. Handle OTP challenge (Mandatory Confirmation Gate per User Rule #5)
