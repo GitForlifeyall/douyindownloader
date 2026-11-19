@@ -129,14 +129,13 @@ function ensureStickyProxy(proxyStr, seed = null) {
   if (!username) return `http://${clean}`;
 
   // If using Oxylabs residential/mobile proxies, guarantee a 30-minute
-  // single-IP session. `sessid_oneip` fails (502) rather than silently rotating,
-  // which is what the risk log now treats as a hard abort.
+  // sticky session. Uses sessid-<id>-sesstime-30 with fresh session entropy
+  // so each execution connects to a live, active peer and avoids expired/dead peers from prior runs.
   if (hostPort.includes("oxylabs.io") || username.startsWith("customer-")) {
     if (!username.includes("sessid") && !username.includes("session")) {
-      const sessId = seed
-        ? crypto.createHash("md5").update(String(seed)).digest("hex").slice(0, 8)
-        : crypto.randomBytes(4).toString("hex");
-      username = `${username}-sessid_oneip-${sessId}-sesstime-30`;
+      const seedHash = seed ? crypto.createHash("md5").update(String(seed)).digest("hex").slice(0, 4) : "";
+      const sessId = `${seedHash}${crypto.randomBytes(3).toString("hex")}`;
+      username = `${username}-sessid-${sessId}-sesstime-30`;
     }
   }
   return `http://${username}:${password}@${hostPort}`;
@@ -1271,12 +1270,15 @@ async function safeGoto(page, url, options = { waitUntil: "domcontentloaded", ti
     try {
       return await page.goto(url, options);
     } catch (err) {
-      console.warn(`[Navigation] Attempt ${attempt} failed for ${url}: ${err.message}`);
-      if (RISK && RISK.proxy && RISK.proxy.strict_sticky
-        && /502|bad gateway|proxy_connection_refused|proxy authentication|tunnel/i.test(err.message || "")) {
-        throw new Error("[Risk] Bound proxy session failed (502/proxy refused); aborting instead of rotating to a new IP.");
+      console.warn(`[Navigation] Attempt ${attempt}/${maxRetries} failed for ${url}: ${err.message}`);
+      if (attempt === maxRetries) {
+        if (RISK && RISK.proxy && RISK.proxy.strict_sticky
+          && /502|bad gateway|proxy_connection_refused|proxy authentication|tunnel/i.test(err.message || "")) {
+          throw new Error(`[Risk] Bound proxy session failed (502/proxy refused) after ${maxRetries} attempts; aborting.`);
+        }
+        throw err;
       }
-      if (attempt === maxRetries) throw err;
+      console.log(`[Navigation] Retrying navigation in ${2.5 * attempt}s (attempt ${attempt + 1}/${maxRetries})...`);
       await new Promise((r) => setTimeout(r, 2500 * attempt));
     }
   }
