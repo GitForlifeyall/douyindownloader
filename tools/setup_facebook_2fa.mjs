@@ -483,6 +483,26 @@ async function extractFacebookBackupCodesPass(page, password = null, maxTries = 
       }
     }
 
+    // Check for "Meta Security Checkup" screen in backup pass -> Click "Two-factor authentication" -> "Manage authentication"
+    if (bodyText.includes("Meta Security Checkup") || bodyText.includes("recommended actions") || (bodyText.includes("Two-factor authentication") && bodyText.includes("Manage your extra login step"))) {
+      console.log("[Facebook 2FA] Detected 'Meta Security Checkup' modal in backup pass. Clicking 'Two-factor authentication' row...");
+      const tfaItem = page.locator("div[role='dialog'] div[role='button']:visible:has-text('Two-factor authentication'), div[role='button']:visible:has-text('Two-factor authentication'):has-text('Manage your extra login step'), div:visible:has-text('Manage your extra login step')").first();
+      if ((await tfaItem.count()) > 0 && (await tfaItem.isVisible().catch(() => false))) {
+        await tfaItem.scrollIntoViewIfNeeded().catch(() => {});
+        await humanClick(page, tfaItem).catch(() => tfaItem.click({ force: true }));
+        await page.waitForTimeout(3000);
+
+        // Click "Manage authentication" if presented
+        const manageBtn = page.locator("div[role='dialog'] div[role='button']:visible:has-text('Manage authentication'), div[role='button']:visible:has-text('Manage authentication'), button:visible:has-text('Manage authentication')").first();
+        if ((await manageBtn.count()) > 0 && (await manageBtn.isVisible().catch(() => false))) {
+          console.log("[Facebook 2FA] Clicking 'Manage authentication' button in backup pass...");
+          await humanClick(page, manageBtn).catch(() => manageBtn.click());
+          await page.waitForTimeout(3000);
+        }
+        continue;
+      }
+    }
+
     // 1. Check if backup codes are currently visible
     if (bodyText.includes("Download codes") || bodyText.includes("Get new codes") || bodyText.includes("Save your backup codes") || bodyText.includes("Recovery codes")) {
       const codes = extractBackupCodesFromText(bodyText);
@@ -791,6 +811,68 @@ export async function setupFacebook2FA(page, emailTarget, password = null, expli
       }
 
       await page.waitForTimeout(3000);
+      continue;
+    }
+
+    // State 6.5: "Meta Security Checkup" screen -> Click "Two-factor authentication" / "Manage your extra login step." -> Click "Manage authentication"
+    if (currentText.includes("Meta Security Checkup") || currentText.includes("recommended actions") || (currentText.includes("Two-factor authentication") && currentText.includes("Manage your extra login step"))) {
+      confirmedOn = true;
+      console.log("[Facebook 2FA - State 6.5] 'Meta Security Checkup' screen detected! Clicking 'Two-factor authentication' row...");
+
+      const tfaRowSelectors = [
+        "div[role='dialog'] div[role='button']:visible:has-text('Two-factor authentication')",
+        "div[role='dialog'] div[tabindex='0']:visible:has-text('Two-factor authentication')",
+        "div[role='dialog'] a:visible:has-text('Two-factor authentication')",
+        "div[role='button']:visible:has-text('Two-factor authentication'):has-text('Manage your extra login step')",
+        "div[tabindex='0']:visible:has-text('Two-factor authentication'):has-text('Manage your extra login step')",
+        "div:visible:has-text('Manage your extra login step')"
+      ];
+
+      let tfaRowClicked = false;
+      for (const sel of tfaRowSelectors) {
+        const item = page.locator(sel).first();
+        if ((await item.count()) > 0 && (await item.isVisible().catch(() => false))) {
+          console.log(`[Facebook 2FA - State 6.5] Clicking 'Two-factor authentication' row via selector: ${sel}...`);
+          await item.scrollIntoViewIfNeeded().catch(() => {});
+          await humanClick(page, item).catch(() => item.click({ force: true }));
+          tfaRowClicked = true;
+          break;
+        }
+      }
+
+      if (!tfaRowClicked) {
+        // Direct DOM evaluation click fallback
+        tfaRowClicked = await page.evaluate(() => {
+          const els = Array.from(document.querySelectorAll("div[role='button'], div[tabindex], div[role='listitem'], div, a"));
+          for (const el of els) {
+            const txt = (el.innerText || "").trim();
+            if (txt.includes("Two-factor authentication") && (txt.includes("Manage your extra login step") || txt.includes("Additional security steps"))) {
+              const target = el.closest("[role='button'], [tabindex='0'], a") || el;
+              target.click();
+              return true;
+            }
+          }
+          return false;
+        }).catch(() => false);
+      }
+
+      await page.waitForTimeout(3000);
+
+      // Now check if "Manage authentication" or account row appears per user instruction
+      const manageBtn = page.locator("div[role='dialog'] div[role='button']:visible:has-text('Manage authentication'), div[role='button']:visible:has-text('Manage authentication'), button:visible:has-text('Manage authentication'), a:visible:has-text('Manage authentication')").first();
+      if ((await manageBtn.count()) > 0 && (await manageBtn.isVisible().catch(() => false))) {
+        console.log("[Facebook 2FA - State 6.5] Found 'Manage authentication' button. Clicking to open 2FA management...");
+        await humanClick(page, manageBtn).catch(() => manageBtn.click());
+        await page.waitForTimeout(3500);
+      } else {
+        const accPicker = page.locator("div[role='dialog'] div[role='listitem'] div[role='button'], div[role='listitem'] div[role='button'], div[role='listitem'] a").first();
+        if ((await accPicker.count()) > 0 && (await accPicker.isVisible().catch(() => false))) {
+          console.log("[Facebook 2FA - State 6.5] Found account row in 2FA account list. Clicking to proceed...");
+          await humanClick(page, accPicker).catch(() => accPicker.click());
+          await page.waitForTimeout(3500);
+        }
+      }
+
       continue;
     }
 

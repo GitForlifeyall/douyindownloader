@@ -37,6 +37,11 @@ This document logs all architectural decisions, code changes, pipeline updates, 
      - Added an explicit URL polling loop immediately following form submission to verify transition to the OTP challenge (`confirmemail.php`, `checkpoint`, `confirm`).
      - If `confirmemail.php?next=undefined` is detected, it cleanly redirects to `https://www.facebook.com/confirmemail.php` so the OTP is dispatched without delay.
      - Confirms either via URL or DOM code input arrival before handing off to `handleOtpChallenge`.
+   - **Meta Security Checkup Screen & 2FA Management Transition (State 6.5)**:
+     - Implemented State 6.5 in [`tools/setup_facebook_2fa.mjs`](file:///c:/Users/rudra/PycharmProjects/douyindownloader/tools/setup_facebook_2fa.mjs) for the "Meta Security Checkup" screen (`You have 3 recommended actions`, `Additional security steps`).
+     - Automatically locates and clicks the `Two-factor authentication` / `Manage your extra login step.` row.
+     - Detects and clicks `Manage authentication` / account list row to seamlessly enter 2FA management and proceed with recovery/backup codes retrieval.
+     - Mirrored this handler in `extractFacebookBackupCodesPass` fallback pass.
 4. **Verification**:
    - `node --check tools/facebook_signup_camoufox.mjs` and `node --check tools/setup_facebook_2fa.mjs` passed with code 0.
 
