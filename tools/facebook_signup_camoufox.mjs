@@ -223,18 +223,20 @@ function validateProxyConnectivity(proxyStr, timeoutMs = 7000) {
   const clean = String(proxyStr).trim();
   const nullDevice = process.platform === "win32" ? "NUL" : "/dev/null";
   try {
-    const cmd = `curl.exe -s -o ${nullDevice} -w "%{http_code}" --connect-timeout 5 -x "${clean}" "https://icanhazip.com"`;
-    const code = execSync(cmd, { encoding: "utf-8", timeout: timeoutMs }).trim();
+    const cmd = `curl.exe -sS -o ${nullDevice} -w "%{http_code}" --connect-timeout 5 -x "${clean}" "https://icanhazip.com"`;
+    const code = execSync(cmd, { encoding: "utf-8", timeout: timeoutMs, stdio: ["pipe", "pipe", "pipe"] }).trim();
     if (code === "200") {
       return { ok: true, statusCode: 200 };
     }
     return { ok: false, statusCode: Number(code) || 0, error: `Proxy returned HTTP status ${code}` };
   } catch (err) {
-    const out = String(err.stdout || err.stderr || err.message || "");
-    if (/407/i.test(out)) {
-      return { ok: false, statusCode: 407, error: "HTTP 407 Proxy Authentication Required (Invalid/Expired Credentials)" };
+    const stdout = (err.stdout ? String(err.stdout) : "").trim();
+    const stderr = (err.stderr ? String(err.stderr) : "").trim();
+    const combined = `${stdout} ${stderr} ${err.message || ""}`;
+    if (/407/i.test(combined) || stdout === "407") {
+      return { ok: false, statusCode: 407, error: `HTTP 407 Proxy Authentication Required / Access Denied (${stderr || stdout || "407"})` };
     }
-    return { ok: false, error: err.message };
+    return { ok: false, error: stderr || err.message };
   }
 }
 
@@ -2284,29 +2286,18 @@ async function run() {
   console.log(`[Proxy] Running pre-flight connectivity verification...`);
   const check = validateProxyConnectivity(effectiveProxy);
   if (!check.ok) {
+    console.error("=".repeat(70));
     if (check.statusCode === 407 || /407/i.test(check.error || "")) {
-      console.error("=".repeat(70));
       console.error(`[Proxy 407 Error] Proxy returned HTTP 407 (Proxy Authentication Required / Access Denied).`);
-      console.error(`[Proxy 407 Error] Target Proxy: ${effectiveProxy}`);
-      console.error(`[Proxy 407 Error] Reason: ${check.error}`);
-      console.error(`[Proxy 407 Error] User Rule: If the proxy is 407, do not fall back to default proxy.`);
-      console.error(`[Proxy 407 Error] Halting script execution immediately.`);
-      console.error("=".repeat(70));
-      process.exit(1);
+    } else {
+      console.error(`[Proxy Error] Configured proxy pre-flight verification failed!`);
     }
-    console.warn(`[Proxy Warning] Configured proxy connection failed: ${check.error || "Connection Refused / Auth Failed"}`);
-    if (explicitProxy && explicitProxy !== DEFAULT_PROXY) {
-      console.warn(`[Proxy Fallback] Supplied --proxy credentials failed (${check.error}).`);
-      console.warn(`[Proxy Fallback] Automatically falling back to verified working DEFAULT_PROXY...`);
-      rawProxy = DEFAULT_PROXY;
-      effectiveProxy = ensureStickyProxy(rawProxy, email);
-      const defaultCheck = validateProxyConnectivity(effectiveProxy);
-      if (defaultCheck.ok) {
-        console.log(`[Proxy Success] Switched to verified DEFAULT_PROXY (HTTP 200)!`);
-      } else {
-        console.warn(`[Proxy Warning] DEFAULT_PROXY check status: ${defaultCheck.error}`);
-      }
-    }
+    console.error(`[Proxy Error] Target Proxy: ${effectiveProxy}`);
+    console.error(`[Proxy Error] Reason:       ${check.error}`);
+    console.error(`[Proxy Error] User Rule: Strictly do NOT fall back to default proxy.`);
+    console.error(`[Proxy Error] Halting script execution immediately.`);
+    console.error("=".repeat(70));
+    process.exit(1);
   } else {
     console.log(`[Proxy Success] Proxy verified and operational (HTTP ${check.statusCode || 200}).`);
   }

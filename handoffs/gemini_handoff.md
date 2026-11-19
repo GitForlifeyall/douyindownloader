@@ -7,6 +7,15 @@ This document logs all architectural decisions, code changes, pipeline updates, 
 
 ## Session History & Major Changes
 
+### [2026-11-19] Fix Pre-Flight Proxy 407 Detection & Fully Remove Default Proxy Fallback
+1. **Issue**:
+   - The user reported: `still fallbacking to default proxty` when their proxy failed with 407.
+   - Root Cause: In `validateProxyConnectivity`, `curl.exe -s` silenced stderr completely. When curl encountered HTTP 407 on CONNECT tunnel, it returned exit code 7 with stdout `"000"` and empty stderr. Because `"407"` was not in `err.message` or `stdout`, the 407 regex matched `false`, causing the script to treat it as a generic failure and execute the fallback block.
+2. **Resolution**:
+   - Updated `validateProxyConnectivity` to use `-sS` with `stdio: ["pipe", "pipe", "pipe"]`, properly capturing curl's stderr: `curl: (7) CONNECT tunnel failed, response 407`.
+   - Completely deleted all fallback logic to `DEFAULT_PROXY`.
+   - Now, if any configured proxy fails pre-flight verification (407 or connectivity failure), the script immediately logs the exact error, warns per user rule, and halts with `process.exit(1)`.
+
 ### [2026-11-19] Implement 7 Critical Hardening Rules for Facebook Registration & 2FA Pipeline
 1. **User Instructions & Requirements**:
    - **Rule 1 (Proxy HTTP 407 Hard Stop)**: If the proxy returns HTTP 407 (auth failed), do NOT fall back to default proxy. Log warning and abort execution immediately (`process.exit(1)`).
