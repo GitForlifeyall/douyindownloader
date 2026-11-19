@@ -720,34 +720,78 @@ export async function setupFacebook2FA(page, emailTarget, password = null, expli
     }
 
     // State 6: "Your two-factor authentication is set up" -> Click "Done" to close modal and reveal settings
-    if (currentText.includes("Your two-factor authentication is set up") || currentText.includes("Manage authentication")) {
+    if (currentText.includes("Your two-factor authentication is set up") || currentText.includes("two-factor authentication is set up") || currentText.includes("Manage authentication")) {
       confirmedOn = true;
       console.log("[Facebook 2FA - State 6] 'Your two-factor authentication is set up' detected! Dismissing dialog via 'Done' / 'Manage authentication'...");
 
-      const manageBtn = container.locator("div[role='button']:visible:has-text('Manage authentication'), button:visible:has-text('Manage authentication')").first();
+      const manageBtn = page.locator("div[role='dialog'] div[role='button']:visible:has-text('Manage authentication'), div[role='button']:visible:has-text('Manage authentication'), button:visible:has-text('Manage authentication')").first();
       if ((await manageBtn.count()) > 0 && (await manageBtn.isVisible().catch(() => false))) {
         await humanClick(page, manageBtn).catch(() => manageBtn.click());
         await page.waitForTimeout(4000);
         continue;
       }
 
-      // User screenshot shows the primary blue "Done" button
-      const doneBtn = container.locator("div[role='button']:visible:has-text('Done'), button:visible:has-text('Done')").first();
-      if ((await doneBtn.count()) > 0 && (await doneBtn.isVisible().catch(() => false))) {
-        console.log("[Facebook 2FA - State 6] Clicking 'Done' button to complete setup modal and reveal 2FA settings...");
-        await humanClick(page, doneBtn).catch(() => doneBtn.click());
-        await page.waitForTimeout(4000);
-        continue;
+      // Robust dismissal of the "Your two-factor authentication is set up" modal via "Done" button
+      let doneClicked = false;
+      const doneSelectors = [
+        "div[role='dialog'] div[role='button']:visible:has-text('Done')",
+        "div[role='dialog'] button:visible:has-text('Done')",
+        "div[role='dialog'] [aria-label='Done']",
+        "div[role='dialog'] span:text-is('Done')",
+        "div[role='button']:visible:has-text('Done')",
+        "button:visible:has-text('Done')",
+        "[aria-label='Done']",
+        "span:text-is('Done')"
+      ];
+      for (const sel of doneSelectors) {
+        const btn = page.locator(sel).first();
+        if ((await btn.count()) > 0 && (await btn.isVisible().catch(() => false))) {
+          console.log(`[Facebook 2FA - State 6] Clicking 'Done' button via selector: ${sel}...`);
+          await humanClick(page, btn).catch(() => btn.click({ force: true }));
+          doneClicked = true;
+          await page.waitForTimeout(2000);
+          break;
+        }
       }
 
-      // Fallback: X button to dismiss modal
-      const closeBtn = container.locator("div[role='button'][aria-label='Close'], div[role='button']:has-text('Close'), svg[aria-label='Close']").first();
-      if ((await closeBtn.count()) > 0 && (await closeBtn.isVisible().catch(() => false))) {
-        console.log("[Facebook 2FA - State 6] Clicking 'Close' (X) to dismiss modal...");
-        await humanClick(page, closeBtn).catch(() => closeBtn.click());
-        await page.waitForTimeout(4000);
-        continue;
+      if (!doneClicked) {
+        // Direct DOM evaluation click fallback
+        doneClicked = await page.evaluate(() => {
+          const els = Array.from(document.querySelectorAll("div[role='button'], button, span, div[tabindex]"));
+          for (const el of els) {
+            if ((el.innerText || el.textContent || "").trim().toLowerCase() === "done") {
+              const rect = el.getBoundingClientRect();
+              if (rect.width > 0 && rect.height > 0) {
+                el.click();
+                return true;
+              }
+            }
+          }
+          return false;
+        }).catch(() => false);
       }
+
+      // Fallback: Check if dialog is still visible and use Close (X) or Enter
+      const dialogStillVisible = await page.evaluate(() => {
+        const txt = (document.body ? document.body.innerText : "");
+        return txt.includes("Your two-factor authentication is set up");
+      }).catch(() => false);
+
+      if (dialogStillVisible) {
+        console.log("[Facebook 2FA - State 6] Setup modal still visible; attempting keyboard Enter and Close (X) button...");
+        await page.keyboard.press("Enter").catch(() => {});
+        await page.waitForTimeout(1000);
+
+        const closeBtn = page.locator("div[role='dialog'] [aria-label='Close'], div[role='dialog'] div[role='button']:has(svg), div[role='dialog'] svg[aria-label='Close']").first();
+        if ((await closeBtn.count()) > 0 && (await closeBtn.isVisible().catch(() => false))) {
+          console.log("[Facebook 2FA - State 6] Clicking 'Close' (X) to dismiss setup modal...");
+          await humanClick(page, closeBtn).catch(() => closeBtn.click({ force: true }));
+          await page.waitForTimeout(3000);
+        }
+      }
+
+      await page.waitForTimeout(3000);
+      continue;
     }
 
     // State 7: "Two-factor authentication is on" -> Click "Recovery codes" / "Backup codes" / "Additional methods"
