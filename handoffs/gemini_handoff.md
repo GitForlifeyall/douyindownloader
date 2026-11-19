@@ -7,6 +7,21 @@ This document logs all architectural decisions, code changes, pipeline updates, 
 
 ## Session History & Major Changes
 
+### [2026-11-19] Comprehensive Mailbox Audit for Instagram Action Needed & Suspension Notices
+1. **Audit Scope**:
+   - Polled live mailboxes via Microsoft Graph API v1.0 and Outlook REST API v2.0 for all 23 Instagram accounts across `output/instagram_registered_accounts.json` and `output/profiles instagram/`.
+   - Scanned for Instagram's equivalent of "Action needed", suspension notices, and checkpoints.
+2. **Findings**:
+   - **1 Account Flagged via Email**:
+     - `RolandHilfer962819@outlook.in` (`rolandhilfer36`): Received `"Verify your account to keep using it, rolandhilfer36"` from `no-reply@mail.instagram.com` on `2026-11-17T22:35:20Z`. Content: *"Confirm you're human to use your profile, rolandhilfer36. 180 days remaining to confirm it's you."* (The exact Instagram equivalent of Facebook's "Action needed" notice).
+   - **1 Account Suspended In-Browser**:
+     - `everhettkynan2635@outlook.in` (`owen.romero10`): Diverted to `/accounts/suspended/` during registration on `2026-11-19T17:05:14Z` (triggered by cross-platform velocity when registering Instagram 12 minutes after creating a Facebook account with the same email).
+   - **21 Clean Accounts**:
+     - 21 out of 23 accounts have zero ban/action-needed emails, holding only registration OTP codes and Meta 2FA authentication emails.
+3. **Key Root Cause Pattern Identified**:
+   - `RolandHilfer` ran on a non-sticky rotating proxy (`customer-mobile_4a6d8827` without `sessid` or `sesstime-30`), causing each request during registration and 2FA to hit from a different IP, triggering Meta's automated 180-day human checkpoint 9 minutes after signup.
+   - Pinned/sticky sessions with 2FA (`NevaehCaronia10625`, `LexieSavinon95096`, `BurleighVandall804767`) remained 100% clean.
+
 ### [2026-11-19] Comprehensive Mailbox Audit for Facebook Suspension & "Action Needed" Notices
 1. **Audit Scope**:
    - Polled live mailboxes via Microsoft Graph API v1.0 and Outlook REST API v2.0 for all configured Facebook accounts (both Inbox and Junk/Spam folders).
