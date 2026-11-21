@@ -4,7 +4,7 @@ const CAMOUFOX_PATH = "file:///C:/Users/rudra/AppData/Roaming/npm/node_modules/c
 const { Camoufox } = await import(CAMOUFOX_PATH);
 
 const profileDir = path.resolve("output", "profiles facebook", "WilsonYurcak691555");
-const proxyStr = "customer-mobile_1465757f:WG0F=DD_9q=E@pr.oxylabs.io:7777";
+const proxyStr = process.env.OXYLABS_PROXY || "";
 
 function parseProxy(p) {
   let clean = p.replace(/^https?:\/\//i, "");

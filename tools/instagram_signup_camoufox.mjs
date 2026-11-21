@@ -50,6 +50,35 @@ const FP_GENERATOR_PATH = "file:///C:/Users/rudra/AppData/Roaming/npm/node_modul
 const { FingerprintGenerator } = await import(FP_GENERATOR_PATH);
 const FP_GENERATOR = new FingerprintGenerator({ browsers: ["firefox"], operatingSystems: ["windows"] });
 
+// ----------------------------------------------------
+// Instant Ctrl+C / SIGINT Graceful Termination Handler
+// ----------------------------------------------------
+let activeBrowser = null;
+let isExiting = false;
+
+async function forceCleanExit(signal = "SIGINT") {
+  if (isExiting) {
+    console.log(`\n[Process] Hard exit forced by user (${signal}). Halting immediately.`);
+    process.exit(130);
+  }
+  isExiting = true;
+  console.log(`\n[Process] Received ${signal} (Ctrl+C). Closing browser and stopping pipeline...`);
+  try {
+    if (activeBrowser) {
+      await Promise.race([
+        activeBrowser.close().catch(() => {}),
+        new Promise((r) => setTimeout(r, 1200))
+      ]);
+    }
+  } catch (e) {}
+  process.exit(signal === "SIGINT" ? 130 : 0);
+}
+
+process.on("SIGINT", () => forceCleanExit("SIGINT"));
+process.on("SIGTERM", () => forceCleanExit("SIGTERM"));
+process.on("SIGHUP", () => forceCleanExit("SIGHUP"));
+
+
 // Parse CLI arguments
 const args = process.argv.slice(2);
 function getArg(name, defaultValue = null) {
@@ -120,25 +149,59 @@ function classifyLocalPart(local) {
   return "other";
 }
 
+function splitProxyParts(proxyStr) {
+  const clean = String(proxyStr).trim().replace(/^https?:\/\//i, "");
+  const at = clean.lastIndexOf("@");
+  if (at < 0) return { hasAuth: false, hostPort: clean, user: "", pass: "" };
+  const auth = clean.slice(0, at);
+  const hostPort = clean.slice(at + 1);
+  const colon = auth.indexOf(":");
+  const user = colon >= 0 ? auth.slice(0, colon) : auth;
+  const pass = colon >= 0 ? auth.slice(colon + 1) : "";
+  return { hasAuth: true, hostPort, user, pass };
+}
+
 function ensureStickyProxy(proxyStr, seed = null) {
   if (!proxyStr) return proxyStr;
-  let clean = String(proxyStr).trim().replace(/^https?:\/\//i, "");
-  if (!clean.includes("@")) return `http://${clean}`;
-  const [auth, hostPort] = clean.split("@");
-  let [username, password] = auth.split(":");
-  if (!username) return `http://${clean}`;
+  const { hasAuth, hostPort, user, pass } = splitProxyParts(proxyStr);
+  if (!hasAuth || !user) return `http://${hostPort}`;
 
-  // If using Oxylabs residential/mobile proxies, guarantee a 30-minute
-  // sticky session. Uses sessid-<id>-sesstime-30 with fresh session entropy
-  // so each execution connects to a live, active peer and avoids expired/dead peers from prior runs.
-  if (hostPort.includes("oxylabs.io") || username.startsWith("customer-")) {
-    if (!username.includes("sessid") && !username.includes("session")) {
-      const seedHash = seed ? crypto.createHash("md5").update(String(seed)).digest("hex").slice(0, 4) : "";
-      const sessId = `${seedHash}${crypto.randomBytes(3).toString("hex")}`;
-      username = `${username}-sessid-${sessId}-sesstime-30`;
-    }
+  let u = user;
+  if (hostPort.includes("oxylabs.io") || u.startsWith("customer-")) {
+    u = u.replace(/-sessid-[a-zA-Z0-9_-]+/g, "").replace(/-sesstime-\d+/g, "");
+    const seedHash = seed ? crypto.createHash("md5").update(String(seed)).digest("hex").slice(0, 4) : "";
+    const sessId = `${seedHash}${crypto.randomBytes(3).toString("hex")}`;
+    u = `${u}-sessid-${sessId}-sesstime-30`;
   }
-  return `http://${username}:${password}@${hostPort}`;
+  return `http://${u}:${pass}@${hostPort}`;
+}
+
+function validateProxyConnectivity(proxy, timeoutMs = 7000) {
+  if (!proxy) return { ok: true };
+  const clean = String(proxy).trim();
+  const nullDevice = process.platform === "win32" ? "NUL" : "/dev/null";
+  try {
+    const code = execFileSync(
+      "curl.exe",
+      ["-sS", "-o", nullDevice, "-w", "%{http_code}", "--connect-timeout", "5", "-x", clean, "https://icanhazip.com"],
+      { encoding: "utf-8", timeout: timeoutMs, stdio: ["pipe", "pipe", "pipe"] }
+    ).trim();
+    if (code === "200") {
+      return { ok: true, statusCode: 200 };
+    }
+    if (code === "407") {
+      return { ok: false, statusCode: 407, error: "HTTP 407 Proxy Authentication Required" };
+    }
+    return { ok: false, statusCode: Number(code) || 0, error: `Proxy returned HTTP status ${code}` };
+  } catch (err) {
+    const stdout = (err.stdout ? String(err.stdout) : "").trim();
+    const stderr = (err.stderr ? String(err.stderr) : "").trim();
+    const combined = `${stdout} ${stderr} ${err.message || ""}`;
+    if (/407/i.test(combined) || stdout === "407") {
+      return { ok: false, statusCode: 407, error: `HTTP 407 Proxy Authentication Required (${stderr || stdout || "407"})` };
+    }
+    return { ok: false, error: stderr || err.message };
+  }
 }
 
 function parseProxyIdentity(proxyStr) {
@@ -165,6 +228,7 @@ function parseProxyIdentity(proxyStr) {
 
   const countryMatch = username.match(/-cc-([a-z]{2})(?:[-_]|$)/i);
   const stateMatch = username.match(/-st-([a-z_]+)(?:[-_]|$)/i);
+  const cityMatch = username.match(/-city-([a-z_]+)(?:[-_]|$)/i);
   return {
     host: host || null,
     username_hash: username ? sha256Short(username, 16) : null,
@@ -173,7 +237,8 @@ function parseProxyIdentity(proxyStr) {
     session_minutes: sessionTimeMatch ? Number(sessionTimeMatch[1]) : null,
     sticky_port: stickyPort,
     country: countryMatch ? countryMatch[1].toUpperCase() : null,
-    state: stateMatch ? stateMatch[1] : null,
+    state: stateMatch ? stateMatch[1].replace(/^us_/, "") : null,
+    city: cityMatch ? cityMatch[1].replace(/_/g, " ") : null,
     has_sticky_session: Boolean(session || stickyPort),
     // sessid_oneip and sticky ports fail instead of rotating; treat them as
     // strict so a mid-run IP change can abort the flow.
@@ -383,19 +448,16 @@ function saveRiskLog() {
   }
 }
 
-// Default Proxy (Oxylabs US Alabama Mobile Proxy)
-const DEFAULT_PROXY = "customer-mobile_abb45c08-cc-us-st-us_alabama:uJPTpI+1nca~@pr.oxylabs.io:7777";
+const DEFAULT_PROXY = process.env.OXYLABS_MOBILE_PROXY || process.env.OXYLABS_PROXY || "";
 const proxyArg = getArg("--proxy", DEFAULT_PROXY);
 
-// Default Account (Fresh Unused Outlook string)
-const DEFAULT_ACCOUNT = "LexieSavinon95096@outlook.in|qdugfp46949|M.C543_BAY.0.U.MsaArtifacts.-CiAmYMxnXgpEiInE1zXpduQiHUVdu3On8BsaKtW8!6RobsbFEPwgoszVGqYjIAi2A9jCIVlrEDhTFY82wl6lO4PtPSvfHHWeHkiF47Lkam*PbBr1EaKJwx1LZtOAJDeeaVZuF!wUnW3iSvGLYZDRpAuLdsYp3ixzUFH62SBR3h4w0oDqVzZ97ykxsRy*b0qQvazCKNPXYwART9L17idTTV8rAI6lZl5aqle89NPCEMsTf8QhbqxHYJHiY906W8v12P9sRZkqRjQbjMDQ8UIahHg250WBvOVTiyRSXafQWGOquqU2juwshLCF4MAhGC5rBaZHgsBgV02Y0PGQPYZdHbHbuEOMO1MvrTuSQwFzPz8plDnC5ot2dOz*v*jvLymuIynWVeCQXxoXQgaXsJZi0GI$|9e5f94bc-e8a4-4e73-b8be-63364c29d753";
-
+const DEFAULT_ACCOUNT = process.env.INSTAGRAM_ACCOUNT || "";
 const explicitEmail = getArg("--email");
 const explicitAccount = getArg("--account");
 
-let email = explicitEmail || (explicitAccount ? null : "LexieSavinon95096@outlook.in");
-let refreshToken = null;
-let clientId = null;
+let email = explicitEmail || null;
+let refreshToken = getArg("--refresh-token") || null;
+let clientId = getArg("--client-id") || null;
 
 const accountArg = explicitAccount || (!explicitEmail ? DEFAULT_ACCOUNT : null);
 if (accountArg) {
@@ -409,6 +471,11 @@ if (accountArg) {
     }
     clientId = rawCId || "9e5f94bc-e8a4-4e73-b8be-63364c29d753";
   }
+}
+
+if (!email) {
+  console.error("[Instagram Error] Missing email. Pass --email / --account or set INSTAGRAM_ACCOUNT in .env.");
+  process.exit(1);
 }
 
 const headless = hasFlag("--headless");
@@ -864,87 +931,86 @@ function checkRegistrationVelocity(minCooldownMinutes = 15) {
 // 5. Proxy Parser & Geolocation Lookup
 function parseProxy(proxyStr) {
   if (!proxyStr) return null;
-  let clean = proxyStr.replace(/^https?:\/\//i, "");
-  if (clean.includes("@")) {
-    const [auth, hostPort] = clean.split("@");
-    const [username, password] = auth.split(":");
+  const { hasAuth, hostPort, user, pass } = splitProxyParts(proxyStr);
+  if (hasAuth) {
     return {
       server: `http://${hostPort}`,
-      username: decodeURIComponent(username),
-      password: decodeURIComponent(password),
+      username: decodeURIComponent(user),
+      password: decodeURIComponent(pass),
     };
   }
-  return { server: `http://${clean}` };
+  return { server: `http://${hostPort}` };
 }
 
 async function getProxyLocation(page) {
-  // First try an in-page fetch on the current document. Before navigating to
-  // Instagram this is about:blank, so it uses the browser's own proxy stack and
-  // gives an authoritative baseline exit IP. If CSP blocks it later in the
-  // flow, fall through to the context request API.
+  const proxyIdent = (RISK && RISK.proxy) ? RISK.proxy : {};
+  const endpoints = [
+    "https://ipapi.co/json/",
+    "https://ipwho.is/",
+    "http://ip-api.com/json/?fields=status,message,country,countryCode,region,regionName,city,timezone,as,org,query",
+  ];
+
+  // Try in-page fetch
   try {
-    const loc = await page.evaluate(async () => {
-      const controller = new AbortController();
-      const tid = setTimeout(() => controller.abort(), 4000);
-      try {
-        const res = await fetch("https://ipapi.co/json/", { signal: controller.signal });
-        if (res.ok) return await res.json();
-      } catch (e) { }
-      finally { clearTimeout(tid); }
+    const loc = await page.evaluate(async (urls) => {
+      for (const url of urls) {
+        try {
+          const controller = new AbortController();
+          const tid = setTimeout(() => controller.abort(), 4000);
+          const res = await fetch(url, { signal: controller.signal });
+          clearTimeout(tid);
+          if (res.ok) {
+            const data = await res.json();
+            if (data && (data.ip || data.query)) return data;
+          }
+        } catch (e) { }
+      }
       return null;
-    });
+    }, endpoints);
+
     if (loc && (loc.ip || loc.query)) {
       return {
         ip: loc.ip || loc.query,
-        city: loc.city || "Unknown",
-        region: loc.region || loc.region_code || "Unknown",
-        country: loc.country_name || loc.country || "United States",
+        city: loc.city || proxyIdent.city || "Unknown",
+        region: loc.region || loc.region_name || loc.regionName || loc.region_code || proxyIdent.state || "Unknown",
+        country: loc.country_name || loc.country || proxyIdent.country || "United States",
         timezone: loc.timezone || "America/Chicago",
-        asn: loc.asn || null,
-        org: loc.org || null,
+        asn: loc.asn || loc.as || null,
+        org: loc.org || loc.connection?.org || null,
       };
     }
   } catch (e) { }
 
-  // Prefer the browser context's request API: it uses the context proxy but
-  // bypasses the page's CSP, so it works even on instagram.com.
-  try {
-    const res = await page.context().request.get("https://ipapi.co/json/", { timeout: 8000 });
-    if (res.ok()) {
-      const loc = await res.json();
-      if (loc && (loc.ip || loc.query)) {
-        return {
-          ip: loc.ip || loc.query,
-          city: loc.city || "Unknown",
-          region: loc.region || loc.region_code || "Unknown",
-          country: loc.country_name || loc.country || "United States",
-          timezone: loc.timezone || "America/Chicago",
-          asn: loc.asn || null,
-          org: loc.org || null,
-        };
+  // Fallback to browser context request API
+  for (const url of endpoints) {
+    try {
+      const res = await page.context().request.get(url, { timeout: 6000 });
+      if (res.ok()) {
+        const loc = await res.json();
+        if (loc && (loc.ip || loc.query)) {
+          return {
+            ip: loc.ip || loc.query,
+            city: loc.city || proxyIdent.city || "Unknown",
+            region: loc.region || loc.region_name || loc.regionName || loc.region_code || proxyIdent.state || "Unknown",
+            country: loc.country_name || loc.country || proxyIdent.country || "United States",
+            timezone: loc.timezone || "America/Chicago",
+            asn: loc.asn || loc.as || null,
+            org: loc.org || loc.connection?.org || null,
+          };
+        }
       }
-    }
-  } catch (e) { }
+    } catch (e) { }
+  }
 
-  try {
-    const res = await page.context().request.get("https://api.ipify.org?format=json", { timeout: 6000 });
-    if (res.ok()) {
-      const loc = await res.json();
-      if (loc && loc.ip) {
-        return {
-          ip: loc.ip,
-          city: "Unknown",
-          region: "Unknown",
-          country: "United States",
-          timezone: "America/Chicago",
-          asn: null,
-          org: null,
-        };
-      }
-    }
-  } catch (e) { }
-
-  return { ip: "Unknown", city: "Unknown", region: "Unknown", country: "United States", timezone: "America/Chicago", asn: null, org: null };
+  return {
+    ip: "Unknown",
+    city: proxyIdent.city || "Unknown",
+    region: proxyIdent.state || "Unknown",
+    country: proxyIdent.country || "United States",
+    timezone: "America/Chicago",
+    asn: null,
+    org: null
+  };
 }
 
 async function captureExitIp(page, step, known = null) {
@@ -1248,17 +1314,23 @@ async function captureTlsFingerprint(context) {
 async function alignFrozenUserAgent(page, fingerprint, fingerprintPath) {
   try {
     const actualUa = await page.evaluate(() => navigator.userAgent);
-    const frozenUa = fingerprint && fingerprint.navigator ? fingerprint.navigator.userAgent : null;
-    if (!actualUa || !fingerprint || !fingerprint.navigator || frozenUa === actualUa) {
+    const frozenUa = fingerprint?.navigator?.userAgent || null;
+    if (!actualUa || !fingerprint?.navigator || frozenUa === actualUa) {
       return { changed: false, actualUa, frozenUa };
     }
     fingerprint.navigator.userAgent = actualUa;
-    try { fs.writeFileSync(fingerprintPath, JSON.stringify(fingerprint, null, 2), "utf-8"); } catch (e) { }
+    if (Array.isArray(fingerprint.headers)) {
+      for (const h of fingerprint.headers) {
+        if (h?.name?.toLowerCase() === "user-agent") h.value = actualUa;
+      }
+    } else if (fingerprint.headers && typeof fingerprint.headers === "object") {
+      fingerprint.headers["user-agent"] = actualUa;
+    }
+    try { fs.writeFileSync(fingerprintPath, JSON.stringify(fingerprint, null, 2), "utf-8"); } catch (e) {}
     if (RISK) {
       RISK.fingerprint.hash = computeFingerprintHash(fingerprint);
       riskEvent("frozen_ua_aligned", { from: frozenUa, to: actualUa });
     }
-    console.log(`[Fingerprint] Aligned frozen UA to the browser's actual UA and persisted it.`);
     return { changed: true, actualUa, frozenUa };
   } catch (e) {
     return { changed: false, error: e.message };
@@ -1287,14 +1359,14 @@ async function safeGoto(page, url, options = { waitUntil: "domcontentloaded", ti
 // 6. Human behavior: Gaussian key delay, non-uniform pauses, mouse drift,
 // occasional typos/backspaces and real tab switches. Uniform per-char delays
 // are themselves a timing fingerprint, so pauses are drawn from a mixture.
-// Natural human keystroke timing (Gaussian ~38ms with jitter, range 16ms - 85ms)
-function gaussianDelay(mean = 38, stdDev = 12) {
+// Natural human keystroke timing (Average 40-52 WPM: 230ms - 300ms per char)
+function gaussianDelay(mean = 260, stdDev = 30) {
   let u = 0;
   let v = 0;
   while (u === 0) u = Math.random();
   while (v === 0) v = Math.random();
   const z = Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
-  return Math.max(16, Math.min(85, Math.round(mean + z * stdDev)));
+  return Math.max(210, Math.min(310, Math.round(mean + z * stdDev)));
 }
 
 const sleepJitter = (ms) => new Promise((resolve) => setTimeout(resolve, Math.max(8, Math.round(ms))));
@@ -1302,7 +1374,7 @@ const sleepJitter = (ms) => new Promise((resolve) => setTimeout(resolve, Math.ma
 // Playwright applies `delay` as the key-down -> key-up hold, not the gap
 // between characters. Passing one char at a time therefore gives long key
 // holds and near-zero inter-key gaps. Wait explicitly after every keystroke.
-async function typeJittered(locator, text, mean = 38, stdDev = 12) {
+async function typeJittered(locator, text, mean = 260, stdDev = 30) {
   for (const char of String(text)) {
     await locator.pressSequentially(char);
     await sleepJitter(gaussianDelay(mean, stdDev));
@@ -1333,7 +1405,16 @@ async function humanType(locator, text, label = "field") {
   } else {
     await locator.click();
   }
-  await locator.fill("");
+  const currentVal = await locator.inputValue().catch(() => "");
+  if (currentVal && currentVal.length > 0) {
+    const p = locator.page ? locator.page() : page;
+    if (p && p.keyboard) {
+      await p.keyboard.press("Control+A").catch(() => {});
+      await humanPause(30, 60);
+      await p.keyboard.press("Backspace").catch(() => {});
+      await humanPause(40, 80);
+    }
+  }
   await humanPause(50, 120);
 
   for (let i = 0; i < value.length; i++) {
@@ -1342,7 +1423,7 @@ async function humanType(locator, text, label = "field") {
       const alphabet = "abcdefghijklmnopqrstuvwxyz";
       const wrong = alphabet[crypto.randomInt(0, alphabet.length)];
       await locator.pressSequentially(wrong);
-      await sleepJitter(gaussianDelay(35, 10));
+      await sleepJitter(gaussianDelay(260, 30));
       await humanPause(60, 140);
       await locator.press("Backspace");
       corrections++;
@@ -1350,7 +1431,7 @@ async function humanType(locator, text, label = "field") {
     }
 
     await locator.pressSequentially(value[i]);
-    await sleepJitter(gaussianDelay(38, 12));
+    await sleepJitter(gaussianDelay(260, 30));
 
     // Very rare micro-hesitation (0.8% chance)
     if (Math.random() < 0.008) {
@@ -1405,6 +1486,17 @@ function saveInstagramAccount(record) {
     console.log("=".repeat(60));
     console.log(`[Database] Saved Instagram account record to: ${REGISTERED_ACCOUNTS_FILE}`);
     console.log("=".repeat(60));
+
+    // Also persist directly into individual profile directory
+    const profName = record.profile_dir || (record.email ? record.email.split("@")[0] : record.username);
+    const profileTargetDir = path.resolve("output", "profiles instagram", profName);
+    if (fs.existsSync(profileTargetDir)) {
+      const profileInfoPath = path.join(profileTargetDir, "account_info.json");
+      const existingInfo = fs.existsSync(profileInfoPath) ? JSON.parse(fs.readFileSync(profileInfoPath, "utf-8")) : {};
+      const merged = { ...existingInfo, ...record };
+      fs.writeFileSync(profileInfoPath, JSON.stringify(merged, null, 2), "utf-8");
+      console.log(`[Database] Synchronized master account record to profile cache: ${profileInfoPath}`);
+    }
   } catch (err) {
     console.warn(`[Database] Error saving account: ${err.message}`);
   }
@@ -1795,9 +1887,34 @@ async function run() {
 
   const { firstName, lastName, fullName, username, nameSource, usernamePattern } = extractNameAndUsername(email);
   const dobObj = generateRandomBirthday();
+  const noProxyFlag = args.includes("--no-proxy") || args.includes("--direct");
   const explicitProxy = getArg("--proxy");
-  const rawProxy = explicitProxy || DEFAULT_PROXY;
-  const effectiveProxy = ensureStickyProxy(rawProxy, email);
+  let rawProxy = noProxyFlag ? null : (explicitProxy || DEFAULT_PROXY);
+  const effectiveProxy = rawProxy ? ensureStickyProxy(rawProxy, email) : null;
+
+  if (effectiveProxy) {
+    console.log(`[Proxy] Running pre-flight connectivity verification...`);
+    const check = validateProxyConnectivity(effectiveProxy);
+    if (!check.ok) {
+      console.error("=".repeat(70));
+      if (check.statusCode === 407 || /407/i.test(check.error || "")) {
+        console.error(`[Proxy 407 Error] Proxy returned HTTP 407 (Proxy Authentication Required / Access Denied).`);
+      } else {
+        console.error(`[Proxy Error] Configured proxy pre-flight verification failed!`);
+      }
+      console.error(`[Proxy Error] Target Proxy: ${effectiveProxy.replace(/^.*@/, "***@")}`);
+      console.error(`[Proxy Error] Reason:       ${check.error}`);
+      console.error(`[Proxy Error] User Rule: Strictly do NOT fall back to default proxy.`);
+      console.error(`[Proxy Error] Halting script execution immediately.`);
+      console.error("=".repeat(70));
+      process.exit(1);
+    } else {
+      console.log(`[Proxy Success] Proxy verified and operational (HTTP ${check.statusCode || 200}).`);
+    }
+  } else if (noProxyFlag) {
+    console.log("[Proxy] Running in direct connection mode (--no-proxy).");
+  }
+
   const parsedProxyIdentity = parseProxyIdentity(effectiveProxy);
   const parsedProxy = parseProxy(effectiveProxy);
   const password = getArg("--password") || generateUniquePassword(firstName, lastName);
@@ -1912,24 +2029,7 @@ async function run() {
     console.log(`[Camoufox] Generated and froze full fingerprint (${fingerprint.screen.width}x${fingerprint.screen.height}) for identity: ${fingerprintPath}`);
   }
 
-  // Strict User-Agent Parity: Ensure DOM navigator.userAgent and request headers strictly match
-  // Camoufox's native C++ Firefox 158.0 engine. Prevents TLS/JA3/HTTP discrepancies on anti-bot detectors.
-  const CAMOUFOX_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:158.0) Gecko/20100101 Firefox/158.0";
-  if (fingerprint && fingerprint.navigator) {
-    if (fingerprint.navigator.userAgent !== CAMOUFOX_UA || fingerprint.navigator.appVersion !== "5.0 (Windows)") {
-      fingerprint.navigator.userAgent = CAMOUFOX_UA;
-      fingerprint.navigator.appVersion = "5.0 (Windows)";
-      if (Array.isArray(fingerprint.headers)) {
-        for (const h of fingerprint.headers) {
-          if (h && h.name && h.name.toLowerCase() === "user-agent") {
-            h.value = CAMOUFOX_UA;
-          }
-        }
-      }
-      try { fs.writeFileSync(fingerprintPath, JSON.stringify(fingerprint, null, 2)); } catch (e) { }
-      console.log(`[Camoufox] Aligned fingerprint User-Agent to native Camoufox C++ stack (${CAMOUFOX_UA})`);
-    }
-  }
+
 
   // Keep the frozen fingerprint's videoCard coherent with the explicit WebGL
   // pair. If they disagree, detectors see a GPU/WebGL mismatch.
@@ -1978,7 +2078,7 @@ async function run() {
     user_data_dir: profileDir,
     headless: headless,
     os: "windows",
-    humanize: 0.85,
+    humanize: false,
     block_webrtc: true,
     exclude_addons: ["UBO"],     // Exclude bundled ad-blocker to prevent CSP data: injection violations & CDN script drops
     screen: { maxWidth: scr.width, maxHeight: scr.height },
@@ -2005,13 +2105,17 @@ async function run() {
       "locale:language": "en",
       "locale:all": "en-US, en",
     },
+    geoip: Boolean(parsedProxy),
   };
   if (parsedProxy) {
     browserConfig.proxy = parsedProxy;
   }
 
   const browser = await Camoufox(browserConfig);
-  const context = (browser.contexts && browser.contexts().length > 0) ? browser.contexts()[0] : null;
+  activeBrowser = browser;
+  const context = typeof browser.addCookies === "function"
+    ? browser
+    : (browser.contexts?.()[0] || null);
   if (context) {
     await context.addCookies([
       {
@@ -2025,37 +2129,21 @@ async function run() {
   const page = (browser.pages && browser.pages().length > 0) ? browser.pages()[0] : await browser.newPage();
   await page.bringToFront().catch(() => { });
 
-  // Native Passkey (WebAuthn) Spoofing: ensures Windows Hello capability is declared and translates
-  // unexpected SecurityError exceptions into standard W3C NotAllowedError so Meta's FBLOGGER never catches "The operation is insecure"
-  await page.addInitScript(() => {
-    try {
-      if (window.PublicKeyCredential) {
-        window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable = async () => true;
-        if (window.PublicKeyCredential.isConditionalMediationAvailable) {
-          window.PublicKeyCredential.isConditionalMediationAvailable = async () => true;
-        }
-      }
-      if (window.navigator && window.navigator.credentials) {
-        const origGet = window.navigator.credentials.get.bind(window.navigator.credentials);
-        window.navigator.credentials.get = async function (options) {
-          if (options && options.mediation === "conditional") {
-            return new Promise((resolve, reject) => {
-              if (options.signal) {
-                options.signal.addEventListener("abort", () => {
-                  reject(new DOMException("The operation was aborted.", "AbortError"));
-                });
-              }
-            });
-          }
-          try {
-            return await origGet(options);
-          } catch (err) {
-            throw new DOMException("The operation either timed out or was not allowed.", "NotAllowedError");
-          }
-        };
-      }
-    } catch (e) { }
-  });
+  // Anti-Detect Webdriver Leak Verification (Rule #2)
+  const isWebdriver = await page.evaluate(() => navigator.webdriver).catch(() => false);
+  if (isWebdriver) {
+    console.error("============================================================");
+    console.error("[Anti-Detect Alert] ⚠️ navigator.webdriver is LEAKING (true)!");
+    console.error("Script halted immediately per workspace security rules.");
+    console.error("Solutions to prevent webdriver leaks:");
+    console.error("  1. Camoufox C++ kernel spoofing strips webdriver natively in Firefox.");
+    console.error("  2. Ensure marionette automation flags are not set in user prefs.");
+    console.error("  3. Check that external CDP wrappers or extensions are not injecting webdriver properties.");
+    console.error("============================================================");
+    await browser.close().catch(() => {});
+    process.exit(1);
+  }
+  console.log("[Anti-Detect Check] navigator.webdriver = false (CLEAN & SPOOFED)");
 
   // Continuous 10-second Screenshot Ticker
   let tickerActive = true;
@@ -2079,6 +2167,18 @@ async function run() {
     console.log("[Camoufox] Verifying Proxy IP, ASN & location via ipapi.co...");
     const proxyLocation = await captureExitIp(page, "pre_signup");
     console.log(`[Camoufox] Exit IP: ${proxyLocation.ip} | ASN: ${proxyLocation.asn || "unknown"} | Location: ${proxyLocation.city}, ${proxyLocation.region}, ${proxyLocation.country}`);
+
+    try {
+      const existingInfo = fs.existsSync(accountInfoPath) ? JSON.parse(fs.readFileSync(accountInfoPath, "utf-8")) : {};
+      existingInfo.proxy_ip = proxyLocation.ip;
+      existingInfo.proxy_location = {
+        city: proxyLocation.city,
+        region: proxyLocation.region,
+        country: proxyLocation.country,
+        timezone: proxyLocation.timezone,
+      };
+      fs.writeFileSync(accountInfoPath, JSON.stringify(existingInfo, null, 2), "utf-8");
+    } catch (e) { }
 
     console.log("[Camoufox] Auditing browser/fingerprint coherence (webdriver, timezone, screen, WebGL, WebRTC)...");
     const coherenceAudit = await auditBrowserCoherence(page, {
@@ -2231,73 +2331,47 @@ async function run() {
     // Field 3: Birthday (Month, Day, Year comboboxes or selects)
     console.log(`[Instagram] Setting Birthday: ${dobObj.formatted}...`);
 
-    async function selectComboboxOption(comboLocator, exactText, labelName) {
-      if ((await comboLocator.count()) > 0 && (await comboLocator.isVisible())) {
-        console.log(`[Instagram] Selecting ${labelName}: "${exactText}"...`);
-        await humanClick(page, comboLocator);
-        await humanPause(80, 180);
+    async function selectField(label, exactText) {
+      console.log(`[Instagram Web] Selecting ${label}: "${exactText}"...`);
+      let box = page.locator(`[role='combobox'][aria-label='Select ${label}'], [role='combobox']:has-text('${label}')`).first();
+      if ((await box.count()) === 0) {
+        const allCombos = page.locator("[role='combobox']");
+        if (label === "Month") box = allCombos.nth(0);
+        else if (label === "Day") box = allCombos.nth(1);
+        else if (label === "Year") box = allCombos.nth(2);
+      }
+      await box.waitFor({ state: "visible", timeout: 10000 });
+      await box.click();
+      await page.waitForTimeout(600);
 
-        // Find option with exact text match to prevent "5" matching "2025" or "15"
-        const opt = page.locator("[role='option']").filter({ hasText: new RegExp(`^\\s*${exactText}\\s*$`) }).first();
-        if ((await opt.count()) > 0) {
-          await opt.scrollIntoViewIfNeeded().catch(() => { });
-          await humanClick(page, opt);
-        } else {
-          const optFallback = page.locator(`[role='option']:text-is('${exactText}')`).first();
-          if ((await optFallback.count()) > 0) {
-            await optFallback.scrollIntoViewIfNeeded().catch(() => { });
-            await humanClick(page, optFallback);
-          } else {
-            await page.evaluate((val) => {
-              const options = Array.from(document.querySelectorAll("[role='option']"));
-              const match = options.find((o) => (o.innerText || "").trim() === String(val));
-              if (match) match.click();
-            }, exactText);
+      const opt = page.locator("[role='option']").filter({ hasText: new RegExp(`^\\s*${exactText}\\s*$`, "i") }).first();
+      if ((await opt.count()) > 0) {
+        await opt.scrollIntoViewIfNeeded().catch(() => {});
+        await opt.click({ force: true });
+        console.log(`[Instagram Web] Clicked option "${exactText}" with force:true`);
+      } else {
+        const clicked = await page.evaluate((val) => {
+          const opts = Array.from(document.querySelectorAll("[role='option']"));
+          const match = opts.find(o => (o.innerText || o.textContent || "").trim().toLowerCase() === String(val).toLowerCase());
+          if (match) {
+            match.scrollIntoView({ block: "nearest" });
+            match.click();
+            match.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+            return true;
           }
-        }
-        await humanPause(80, 180);
-        return true;
+          return false;
+        }, exactText);
+        console.log(`[Instagram Web] DOM fallback for "${exactText}": ${clicked}`);
       }
-      return false;
+      await page.waitForTimeout(500);
+      const currentText = (await box.innerText().catch(() => "")).replace(/\n/g, " - ");
+      console.log(`[Instagram Web] Box ${label} value: '${currentText}'`);
     }
 
-    // Month
-    const monthCombo = page.locator("[role='combobox']:has-text('Month')").first();
-    const monthSelected = await selectComboboxOption(monthCombo, dobObj.month, "Month");
-    if (!monthSelected) {
-      const monthSelect = page.locator("select[title*='Month' i], select[aria-label*='Month' i]").first();
-      if ((await monthSelect.count()) > 0 && (await monthSelect.isVisible())) {
-        await monthSelect.selectOption({ label: dobObj.month }).catch(async () => {
-          await monthSelect.selectOption({ value: String(dobObj.monthIndex) });
-        });
-      }
-    }
-
-    // Day
-    await humanPause(80, 200);
-    const dayCombo = page.locator("[role='combobox']:has-text('Day')").first();
-    const daySelected = await selectComboboxOption(dayCombo, dobObj.dayStr, "Day");
-    if (!daySelected) {
-      const daySelect = page.locator("select[title*='Day' i], select[aria-label*='Day' i]").first();
-      if ((await daySelect.count()) > 0 && (await daySelect.isVisible())) {
-        await daySelect.selectOption({ label: dobObj.dayStr }).catch(async () => {
-          await daySelect.selectOption({ value: String(dobObj.day) });
-        });
-      }
-    }
-
-    // Year
-    await humanPause(80, 200);
-    const yearCombo = page.locator("[role='combobox']:has-text('Year')").first();
-    const yearSelected = await selectComboboxOption(yearCombo, String(dobObj.year), "Year");
-    if (!yearSelected) {
-      const yearSelect = page.locator("select[title*='Year' i], select[aria-label*='Year' i]").first();
-      if ((await yearSelect.count()) > 0 && (await yearSelect.isVisible())) {
-        await yearSelect.selectOption({ label: String(dobObj.year) }).catch(async () => {
-          await yearSelect.selectOption({ value: String(dobObj.year) });
-        });
-      }
-    }
+    await selectField("Month", dobObj.month);
+    await selectField("Day", dobObj.dayStr);
+    await selectField("Year", String(dobObj.year));
+    await humanPause(200, 400);
 
     // Field 4: Full Name (second visible text input)
     await humanPause(100, 240);
@@ -2329,12 +2403,29 @@ async function run() {
     });
     await humanPause(150, 300);
 
-    // 4. Click Submit / Sign Up Button
+    // 4. Click Submit / Sign Up Button (strictly targeting Submit, never Back button)
     console.log("[Instagram] Submitting registration form ('Submit' / 'Sign Up')...");
-    const submitBtn = page.locator("div[role='button']:has-text('Submit'), [role='button']:has-text('Submit'), button:has-text('Submit'), button[type='submit'], button:has-text('Sign up'), button:has-text('Sign Up')").first();
+    const submitBtn = page.locator("div[role='button']:has-text('Submit'), button:has-text('Submit'), div[role='button']:has-text('Sign up'), button:has-text('Sign up')").last();
     await submitBtn.waitFor({ state: "visible", timeout: 10000 });
     const formSubmitTime = Date.now();
-    await humanClick(page, submitBtn);
+    await submitBtn.scrollIntoViewIfNeeded().catch(() => {});
+    await submitBtn.focus().catch(() => {});
+    await submitBtn.click({ force: true });
+
+    // Dispatch native click on Submit button specifically (never Back)
+    await page.evaluate(() => {
+      const candidates = Array.from(document.querySelectorAll("button, div[role='button'], [role='button']"));
+      const btn = candidates.find(b => {
+        const txt = (b.innerText || b.textContent || "").trim().toLowerCase();
+        const aria = (b.getAttribute("aria-label") || "").trim().toLowerCase();
+        return (txt === "submit" || txt === "sign up") && aria !== "back" && b.offsetParent !== null && !b.disabled;
+      });
+      if (btn) {
+        btn.scrollIntoView({ block: "center" });
+        btn.click();
+        btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      }
+    }).catch(() => {});
     riskMark("form_submitted", {
       seconds_since_page_load: RISK && RISK.timing.page_loaded_at
         ? Math.round((Date.now() - new Date(RISK.timing.page_loaded_at).getTime()) / 1000)
@@ -2437,7 +2528,11 @@ async function run() {
         await targetInput.waitFor({ state: "visible", timeout: 8000 });
         await humanPause(80, 180);
         await humanClick(page, targetInput);
-        await targetInput.fill("");
+        const curOtpVal = await targetInput.inputValue().catch(() => "");
+        if (curOtpVal && curOtpVal.length > 0) {
+          await page.keyboard.press("Control+A").catch(() => {});
+          await page.keyboard.press("Backspace").catch(() => {});
+        }
         await typeJittered(targetInput, otpData.otp, 35, 12);
         await page.waitForTimeout(200);
 
@@ -2681,7 +2776,7 @@ async function run() {
         riskMark("twofa_started");
         await captureExitIp(page, "before_2fa");
         console.log("[Instagram] Proceeding to automated 2FA setup in Meta Accounts Center...");
-        const twoFaResult = await setupInstagram2FA(page, email, clientId, refreshToken);
+        const twoFaResult = await setupInstagram2FA(page, email, password, profileDir, clientId, refreshToken);
         riskEvent("2fa_result", { success: Boolean(twoFaResult.success), status: twoFaResult.status || null });
         if (!twoFaResult.success) {
           console.error(`[Instagram] WARNING: 2FA was NOT confirmed (${twoFaResult.status}): ${twoFaResult.error || "unknown reason"}. Treat this account as unprotected and retry.`);
@@ -2706,6 +2801,7 @@ async function run() {
     await new Promise((resolve) => browser.on("close", resolve));
 
   } finally {
+    tickerActive = false;
     saveRiskLog();
     console.log("[Instagram] Script finished.");
   }

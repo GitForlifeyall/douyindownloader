@@ -27,6 +27,35 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CAMOUFOX_PATH = "file:///C:/Users/rudra/AppData/Roaming/npm/node_modules/camoufox-cli/node_modules/camoufox-js/dist/index.js";
 const { Camoufox } = await import(CAMOUFOX_PATH);
 
+// ----------------------------------------------------
+// Instant Ctrl+C / SIGINT Graceful Termination Handler
+// ----------------------------------------------------
+let activeBrowser = null;
+let isExiting = false;
+
+async function forceCleanExit(signal = "SIGINT") {
+  if (isExiting) {
+    console.log(`\n[Process] Hard exit forced by user (${signal}). Halting immediately.`);
+    process.exit(130);
+  }
+  isExiting = true;
+  console.log(`\n[Process] Received ${signal} (Ctrl+C). Closing browser and stopping pipeline...`);
+  try {
+    if (activeBrowser) {
+      await Promise.race([
+        activeBrowser.close().catch(() => { }),
+        new Promise((r) => setTimeout(r, 1200))
+      ]);
+    }
+  } catch (e) { }
+  process.exit(signal === "SIGINT" ? 130 : 0);
+}
+
+process.on("SIGINT", () => forceCleanExit("SIGINT"));
+process.on("SIGTERM", () => forceCleanExit("SIGTERM"));
+process.on("SIGHUP", () => forceCleanExit("SIGHUP"));
+
+
 // Parse CLI arguments
 const args = process.argv.slice(2);
 function getArg(name, defaultValue = null) {
@@ -46,7 +75,7 @@ let password = getArg("--password");
 const profileDirArg = getArg("--profile-dir");
 const clientId = getArg("--client-id");
 const refreshToken = getArg("--refresh-token");
-const DEFAULT_PROXY = "customer-resi_4edb25d7:fo4ENfj4pMx+@pr.oxylabs.io:7777";
+const DEFAULT_PROXY = process.env.OXYLABS_PROXY || "";
 const proxyArg = getArg("--proxy", DEFAULT_PROXY);
 const tempMailFlag = hasFlag("--temp-mail");
 const headless = hasFlag("--headless");
@@ -247,6 +276,34 @@ async function pollOutlookVerification(cId, rToken, maxWaitSec = 60) {
   return null;
 }
 
+// Keystroke cadence calibrated strictly to 40-52 WPM (230ms - 300ms/char)
+function gaussianDelay(mean = 260, stdDev = 30) {
+  let u = 0;
+  let v = 0;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+  const z = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+  return Math.max(210, Math.min(310, Math.round(mean + z * stdDev)));
+}
+
+async function humanType(page, locator, text) {
+  const element = typeof locator.first === "function" ? locator.first() : locator;
+  await element.click().catch(() => { });
+  await new Promise((r) => setTimeout(r, 120 + Math.random() * 80));
+  const currentVal = await element.inputValue().catch(() => "");
+  if (currentVal && currentVal.length > 0) {
+    await page.keyboard.press("Control+A").catch(() => { });
+    await new Promise((r) => setTimeout(r, 40));
+    await page.keyboard.press("Backspace").catch(() => { });
+    await new Promise((r) => setTimeout(r, 40));
+  }
+  await new Promise((r) => setTimeout(r, 60 + Math.random() * 60));
+  for (const char of String(text)) {
+    await page.keyboard.type(char, { delay: gaussianDelay(260, 30) }).catch(() => { });
+  }
+  await new Promise((r) => setTimeout(r, 120 + Math.random() * 100));
+}
+
 // Complete all Metricool multi-step onboarding survey dialogs
 async function handleMetricoolOnboarding(page, maxWaitMs = 35000) {
   console.log("[Camoufox] Checking for Metricool onboarding survey dialogs...");
@@ -444,6 +501,7 @@ async function main() {
     browserConfig.geoip = true;
   }
   const context = await Camoufox(browserConfig);
+  activeBrowser = context;
 
   const page = await context.newPage();
 
@@ -479,28 +537,50 @@ async function main() {
       const submitBtn = page.locator("button:has-text('Start for free')");
 
       await emailField.waitFor({ state: "visible", timeout: 15000 });
-      console.log(`[Camoufox] Entering signup credentials for: ${email}...`);
-      await emailField.click();
-      await emailField.fill(email);
-      await page.waitForTimeout(300);
+      console.log(`[Camoufox] Entering signup credentials at 40-52 WPM for: ${email}...`);
+      await humanType(page, emailField, email);
 
-      await passField.click();
-      await passField.fill(password);
-      await page.waitForTimeout(400);
+      console.log(`[Camoufox] Entering password at 40-52 WPM...`);
+      await humanType(page, passField, password);
 
-      // Check consent checkboxes
+      // Check all consent checkboxes (Legal Terms + Communications/Offers)
+      console.log("[Camoufox] Ensuring ALL consent checkboxes are checked...");
+      const cbContainers = page.locator(".v-checkbox, .mc-checkbox");
+      const cbContainerCount = await cbContainers.count();
+      for (let i = 0; i < cbContainerCount; i++) {
+        const box = cbContainers.nth(i);
+        const inp = box.locator("input[type='checkbox']");
+        const isChecked = await inp.isChecked().catch(() => false);
+        if (!isChecked) {
+          await humanClick(page, box).catch(async () => {
+            await box.click({ force: true }).catch(() => {});
+          });
+          await page.waitForTimeout(250);
+        }
+      }
+
+      // Safety layer: verify raw input[type='checkbox'] elements
       const checkboxes = page.locator("input[type='checkbox']");
       const cbCount = await checkboxes.count();
-      console.log(`[Camoufox] Checking ${cbCount} consent checkboxes...`);
       for (let i = 0; i < cbCount; i++) {
         try {
           const cb = checkboxes.nth(i);
-          if (!(await cb.isChecked())) {
-            await cb.check({ force: true });
+          if (!(await cb.isChecked().catch(() => false))) {
+            await cb.locator("..").click({ force: true }).catch(() => {});
+            await cb.check({ force: true }).catch(() => {});
+            await page.waitForTimeout(200);
           }
         } catch (e) { }
       }
-      await page.waitForTimeout(500);
+
+      // Final verification: ensure no unchecked icon remains (fa-square without fa-square-check)
+      const uncheckedIcons = page.locator(".v-checkbox i.fa-square:not(.fa-square-check), .mc-checkbox i.fa-square:not(.fa-square-check)");
+      const uncheckedCount = await uncheckedIcons.count();
+      for (let i = 0; i < uncheckedCount; i++) {
+        await uncheckedIcons.nth(i).click({ force: true }).catch(() => {});
+        await page.waitForTimeout(200);
+      }
+      await page.waitForTimeout(600);
 
       console.log("[Camoufox] Submitting registration form ('Start for free')...");
       await submitBtn.click({ force: true });

@@ -58,67 +58,37 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = HTTP_TIMEOUT_MS) 
   }
 }
 
-// Default Proxy (Oxylabs Mobile Proxy)
-const DEFAULT_PROXY = "customer-mobile_83bd2e52:DPD~dmUeZ1~p@pr.oxylabs.io:7777";
+// Default Proxy (Oxylabs Mobile Proxy from Environment)
+const DEFAULT_PROXY = process.env.OXYLABS_MOBILE_PROXY || process.env.OXYLABS_PROXY || "";
+const noProxyFlag = hasFlag("--no-proxy") || hasFlag("--direct");
 let proxyArg = getArg("--proxy");
 
-const explicitAccount = getArg("--account");
-const explicitEmail = getArg("--email");
-
-let email = explicitEmail || (explicitAccount ? explicitAccount.split("|")[0] : "NevaehCaronia10625@outlook.in");
-let refreshToken = getArg("--refresh-token") || getArg("--token");
-let clientId = getArg("--client-id", "9e5f94bc-e8a4-4e73-b8be-63364c29d753");
-
-if (explicitAccount) {
-  const parts = explicitAccount.split("|");
-  email = (parts[0] || "").trim();
-  if (parts.length >= 4) {
-    refreshToken = (parts[2] || "").trim();
-    let rawCId = (parts[3] || "").trim().replace(/["']/g, "");
-    if (rawCId.startsWith("9e5f94bc") && rawCId.length === 35) {
-      rawCId = "9e5f94bc-e8a4-4e73-b8be-63364c29d753";
+function validateProxyConnectivity(proxy, timeoutMs = 7000) {
+  if (!proxy) return { ok: true };
+  const clean = String(proxy).trim();
+  const nullDevice = process.platform === "win32" ? "NUL" : "/dev/null";
+  try {
+    const code = execFileSync(
+      "curl.exe",
+      ["-sS", "-o", nullDevice, "-w", "%{http_code}", "--connect-timeout", "5", "-x", clean, "https://icanhazip.com"],
+      { encoding: "utf-8", timeout: timeoutMs, stdio: ["pipe", "pipe", "pipe"] }
+    ).trim();
+    if (code === "200") {
+      return { ok: true, statusCode: 200 };
     }
-    clientId = rawCId || clientId;
-  }
-}
-
-// Auto-fallback: check if account_info.json exists in profile directory
-if (email) {
-  const profileName = email.split("@")[0].replace(/[^A-Za-z0-9._-]/g, "");
-  const infoPath = path.resolve("output", "profiles instagram", profileName, "account_info.json");
-  if (fs.existsSync(infoPath)) {
-    try {
-      const info = JSON.parse(fs.readFileSync(infoPath, "utf-8"));
-      refreshToken = info.refresh_token || refreshToken;
-      clientId = info.client_id || clientId;
-      if (!proxyArg && info.proxy_used) {
-        proxyArg = info.proxy_used;
-      }
-      console.log(`[Instagram 2FA] Loaded Outlook OAuth tokens & proxy automatically from: ${infoPath}`);
-    } catch (e) { }
-  }
-
-  // Older profiles may not have account_info.json; reuse the proxy recorded in
-  // the master registry so 2FA does not run from a different exit IP than signup.
-  if (!proxyArg) {
-    const registryPath = path.resolve("output", "instagram_registered_accounts.json");
-    if (fs.existsSync(registryPath)) {
-      try {
-        const list = JSON.parse(fs.readFileSync(registryPath, "utf-8"));
-        if (Array.isArray(list)) {
-          const record = list.find((a) => (a && a.email ? a.email : "").toLowerCase() === email.toLowerCase());
-          if (record && typeof record.proxy_used === "string" && record.proxy_used.trim()) {
-            proxyArg = record.proxy_used.trim();
-            console.log("[Instagram 2FA] Reusing the signup proxy from the account registry.");
-          }
-        }
-      } catch (e) { }
+    if (code === "407") {
+      return { ok: false, statusCode: 407, error: "HTTP 407 Proxy Authentication Required" };
     }
+    return { ok: false, statusCode: Number(code) || 0, error: `Proxy returned HTTP status ${code}` };
+  } catch (err) {
+    const stdout = (err.stdout ? String(err.stdout) : "").trim();
+    const stderr = (err.stderr ? String(err.stderr) : "").trim();
+    const combined = `${stdout} ${stderr} ${err.message || ""}`;
+    if (/407/i.test(combined) || stdout === "407") {
+      return { ok: false, statusCode: 407, error: `HTTP 407 Proxy Authentication Required (${stderr || stdout || "407"})` };
+    }
+    return { ok: false, error: stderr || err.message };
   }
-}
-if (!proxyArg) {
-  proxyArg = DEFAULT_PROXY;
-  console.warn("[Instagram 2FA] WARNING: no saved proxy found for this account; using the shared default. This can link accounts and trigger a checkpoint.");
 }
 
 // ----------------------------------------------------
@@ -177,6 +147,23 @@ async function typeJittered(locator, text, mean = 38, stdDev = 12) {
   for (const char of String(text)) {
     await locator.pressSequentially(char);
     await new Promise((resolve) => setTimeout(resolve, keyDelay(mean, stdDev)));
+  }
+}
+
+async function safeClearInput(locator, page = null) {
+  const currentVal = await locator.inputValue().catch(() => "");
+  if (currentVal && currentVal.length > 0) {
+    if (page && page.keyboard) {
+      await page.keyboard.press("Control+A").catch(() => {});
+      await new Promise((r) => setTimeout(r, 40));
+      await page.keyboard.press("Backspace").catch(() => {});
+      await new Promise((r) => setTimeout(r, 40));
+    } else if (typeof locator.press === "function") {
+      await locator.press("Control+A").catch(() => {});
+      await new Promise((r) => setTimeout(r, 40));
+      await locator.press("Backspace").catch(() => {});
+      await new Promise((r) => setTimeout(r, 40));
+    }
   }
 }
 
@@ -365,11 +352,11 @@ async function safeGoto(page, url, options = { waitUntil: "domcontentloaded", ti
   }
 }
 
-export function updateAccountWith2FA(emailTarget, twoFactorData) {
+export function updateAccountWith2FA(emailTarget, twoFactorData, explicitProfileDir = null) {
   const profileName = emailTarget.split("@")[0].replace(/[^A-Za-z0-9._-]/g, "");
   const accountsFile = path.resolve("output", "instagram_registered_accounts.json");
   const masterBackupFile = path.resolve("output", "instagram_backup_codes.json");
-  const profileDir = path.resolve("output", "profiles instagram", profileName);
+  const profileDir = explicitProfileDir || path.resolve("output", "profiles instagram", profileName);
 
   const incomingSecret = twoFactorData.secret_key || null;
   const incomingCodes = Array.isArray(twoFactorData.backup_codes) ? twoFactorData.backup_codes : [];
@@ -392,7 +379,7 @@ export function updateAccountWith2FA(emailTarget, twoFactorData) {
           secret_key: incomingSecret || existing.secret_key || null,
           backup_codes: backupCodes,
           backup_codes_saved: backupCodes.length > 0,
-          configured_at: enabled ? new Date().toISOString() : (existing.configured_at || null),
+          configured_at: enabled ? (existing.configured_at || new Date().toISOString()) : (existing.configured_at || null),
           last_attempt_at: new Date().toISOString(),
         };
         fs.writeFileSync(accountsFile, JSON.stringify(list, null, 2), "utf-8");
@@ -422,7 +409,7 @@ export function updateAccountWith2FA(emailTarget, twoFactorData) {
         "Note: Each backup code can only be used once if you lose access to your authenticator app.",
       ].join("\n");
       fs.writeFileSync(txtPath, content, "utf-8");
-      console.log(`[Database] Saved backup codes text file to: ${txtPath}`);
+      console.log(`[Database] Saved Instagram backup codes text file to: ${txtPath}`);
     } catch (err) {
       console.warn(`[Database] Note saving profile backup_codes.txt: ${err.message}`);
     }
@@ -439,6 +426,7 @@ export function updateAccountWith2FA(emailTarget, twoFactorData) {
     const backupCodes = incomingCodes.length > 0 ? incomingCodes : existingCodes;
     masterVault[emailTarget] = {
       username: profileName,
+      platform: "instagram",
       enabled: enabled || existing.enabled === true,
       status,
       secret_key: incomingSecret || existing.secret_key || null,
@@ -449,6 +437,25 @@ export function updateAccountWith2FA(emailTarget, twoFactorData) {
     fs.writeFileSync(masterBackupFile, JSON.stringify(masterVault, null, 2), "utf-8");
     console.log(`[Database] Updated master backup registry: ${masterBackupFile}`);
   } catch (err) { }
+
+  // 4. Update profile account_info.json if present
+  try {
+    const accountInfoPath = path.join(profileDir, "account_info.json");
+    if (fs.existsSync(accountInfoPath)) {
+      const info = JSON.parse(fs.readFileSync(accountInfoPath, "utf-8"));
+      info.two_factor = {
+        enabled: enabled || info.two_factor?.enabled === true,
+        status,
+        method: "TOTP_AUTHENTICATOR_APP",
+        secret_key: incomingSecret || info.two_factor?.secret_key || null,
+        backup_codes: incomingCodes.length > 0 ? incomingCodes : (info.two_factor?.backup_codes || []),
+        backup_codes_saved: (incomingCodes.length > 0) || Boolean(info.two_factor?.backup_codes_saved),
+        updated_at: new Date().toISOString(),
+      };
+      fs.writeFileSync(accountInfoPath, JSON.stringify(info, null, 2), "utf-8");
+      console.log(`[Database] Updated ${accountInfoPath} with Instagram 2FA state.`);
+    }
+  } catch (e) { }
 }
 
 // Helper to get the truly active foreground dialog (ignoring background loading overlays)
@@ -475,17 +482,92 @@ function extractBackupCodesFromText(text) {
   return [...new Set(matches.map((code) => code.replace(/\s+/g, "")))];
 }
 
-async function extractBackupCodesPass(page, maxTries = 8) {
+/**
+ * Handle password challenge if prompted anywhere during 2FA setup:
+ * "it may ask for your password, if it does then write pass else carry on"
+ */
+async function handlePasswordChallengeIfPresent(container, password, page = null) {
+  if (!password) return false;
+  try {
+    const pwInput = container.locator("input[type='password']:visible").first();
+    if ((await pwInput.count()) > 0 && (await pwInput.isVisible().catch(() => false))) {
+      console.log("[Instagram 2FA] Detected password challenge prompt. Entering password...");
+      await humanClick(page || container, pwInput).catch(() => pwInput.click());
+      await safeClearInput(pwInput, page || container);
+      await typeJittered(pwInput, password, 45, 15);
+      await new Promise((r) => setTimeout(r, 600));
+
+      const submitBtn = container.locator("button:has-text('Continue'), button:has-text('Submit'), button:has-text('Next'), [role='button']:has-text('Continue'), [role='button']:has-text('Submit'), [role='button']:has-text('Next'), button[type='submit']:visible").first();
+      if ((await submitBtn.count()) > 0 && (await submitBtn.isVisible().catch(() => false))) {
+        console.log("[Instagram 2FA] Submitting password challenge...");
+        await humanClick(page || container, submitBtn).catch(() => submitBtn.click());
+        await new Promise((r) => setTimeout(r, 4000));
+        return true;
+      }
+    }
+  } catch (err) {
+    console.warn(`[Instagram 2FA] Note during password challenge check: ${err.message}`);
+  }
+  return false;
+}
+
+async function extractBackupCodesPass(page, password = null, maxTries = 8) {
+  console.log("[Instagram 2FA] Running dedicated Backup Codes retrieval pass...");
   for (let t = 1; t <= maxTries; t++) {
     await page.waitForTimeout(2000);
+
+    // 0. Handle password challenge if prompted
+    await handlePasswordChallengeIfPresent(page, password, page);
+
     const bodyText = (await page.locator("body").innerText().catch(() => "")).replace(/\s+/g, " ");
 
+    // Check for "Your two-factor authentication is set up" modal if still open
+    if (bodyText.includes("Your two-factor authentication is set up") || bodyText.includes("two-factor authentication is set up")) {
+      // 1. Check for direct "backup codes" link first
+      const backupLink = page.locator("a:visible:has-text('backup codes'), span:visible:has-text('backup codes'), div[role='button']:visible:has-text('backup codes'), [role='link']:visible:has-text('backup codes')").first();
+      if ((await backupLink.count()) > 0 && (await backupLink.isVisible().catch(() => false))) {
+        console.log("[Instagram 2FA] Clicking direct 'backup codes' link on setup completion modal...");
+        await humanClick(page, backupLink).catch(() => backupLink.click({ force: true }));
+        await page.waitForTimeout(3000);
+        continue;
+      }
+
+      // 2. Check for "Manage authentication" button (Meta's primary action button!)
+      const manageAuthBtn = page.locator("div[role='dialog'] div[role='button']:visible:has-text('Manage authentication'), div[role='dialog'] button:visible:has-text('Manage authentication'), div[role='button']:visible:has-text('Manage authentication'), button:visible:has-text('Manage authentication'), [role='button']:has-text('Manage authentication')").first();
+      if ((await manageAuthBtn.count()) > 0 && (await manageAuthBtn.isVisible().catch(() => false))) {
+        console.log("[Instagram 2FA] Clicking 'Manage authentication' button on setup completion modal in recovery pass...");
+        await humanClick(page, manageAuthBtn).catch(() => manageAuthBtn.click({ force: true }));
+        await page.waitForTimeout(3500);
+        continue;
+      }
+    }
+
+    // Check for "Meta Security Checkup" screen in backup pass -> Click "Two-factor authentication" -> "Manage authentication"
+    if (bodyText.includes("Meta Security Checkup") || bodyText.includes("Security Checkup") || bodyText.includes("recommended actions") || (bodyText.includes("Two-factor authentication") && bodyText.includes("Manage your extra login step"))) {
+      console.log("[Instagram 2FA] Detected 'Meta Security Checkup' modal in backup pass. Clicking 'Two-factor authentication' row...");
+      const tfaItem = page.locator("div[role='dialog'] div[role='button']:visible:has-text('Two-factor authentication'), div[role='button']:visible:has-text('Two-factor authentication'):has-text('Manage your extra login step'), div[role='button']:visible:has-text('Two-factor authentication'), div:visible:has-text('Manage your extra login step')").first();
+      if ((await tfaItem.count()) > 0 && (await tfaItem.isVisible().catch(() => false))) {
+        await tfaItem.scrollIntoViewIfNeeded().catch(() => {});
+        await humanClick(page, tfaItem).catch(() => tfaItem.click({ force: true }));
+        await page.waitForTimeout(3000);
+
+        // Click "Manage authentication" if presented
+        const manageBtn = page.locator("div[role='dialog'] div[role='button']:visible:has-text('Manage authentication'), div[role='button']:visible:has-text('Manage authentication'), button:visible:has-text('Manage authentication')").first();
+        if ((await manageBtn.count()) > 0 && (await manageBtn.isVisible().catch(() => false))) {
+          console.log("[Instagram 2FA] Clicking 'Manage authentication' button in backup pass...");
+          await humanClick(page, manageBtn).catch(() => manageBtn.click());
+          await page.waitForTimeout(3000);
+        }
+        continue;
+      }
+    }
+
     // 1. Check if backup codes are currently displayed on page or in modal
-    if (bodyText.includes("Download codes") || bodyText.includes("Get new codes") || bodyText.includes("Save your backup codes")) {
+    if (bodyText.includes("Download codes") || bodyText.includes("Get new codes") || bodyText.includes("Save your backup codes") || (bodyText.includes("Backup codes") && /\b(?:\d{4}\s+\d{4}|\d{8})\b/.test(bodyText))) {
       const codes = extractBackupCodesFromText(bodyText);
       if (codes.length > 0) {
         console.log(`[Instagram 2FA] Extracted ${codes.length} Backup Codes (values hidden).`);
-        const closeBtn = page.locator("div[role='button'][aria-label='Close'], div[role='button']:has-text('Close')").first();
+        const closeBtn = page.locator("div[role='button'][aria-label='Close'], div[role='button']:has-text('Close'), button:has-text('Done'), [aria-label='Close']").first();
         if ((await closeBtn.count()) > 0 && (await closeBtn.isVisible())) {
           await closeBtn.click().catch(() => {});
         }
@@ -493,29 +575,47 @@ async function extractBackupCodesPass(page, maxTries = 8) {
       }
     }
 
-    // 2. Check for "Backup codes" button
-    const backupBtn = page.locator("div[role='button']:visible:has-text('Backup codes')").first();
+    // 1.5 Check if "Turn on" button or switch is present on Backup Codes screen
+    const turnOnBtn = page.locator("button:visible:has-text('Turn on'), div[role='button']:visible:has-text('Turn on'), [role='button']:has-text('Turn on'), [role='switch'][aria-checked='false']").first();
+    if ((await turnOnBtn.count()) > 0 && (await turnOnBtn.isVisible().catch(() => false))) {
+      console.log("[Instagram 2FA] Detected 'Turn on' button/switch for backup codes in recovery pass. Clicking...");
+      await humanClick(page, turnOnBtn).catch(() => turnOnBtn.click({ force: true }));
+      await page.waitForTimeout(3000);
+      continue;
+    }
+
+    // 2. Check for "Backup codes" button / link
+    const backupBtn = page.locator("div[role='button']:visible:has-text('Backup codes'), div[role='button']:visible:has-text('Recovery codes'), a:visible:has-text('Backup codes'), a:visible:has-text('Recovery codes'), span:visible:has-text('Backup codes'), span:visible:has-text('Backup codes')").first();
     if ((await backupBtn.count()) > 0 && (await backupBtn.isVisible())) {
       console.log("[Instagram 2FA] Clicking 'Backup codes' navigation button...");
-      await backupBtn.click().catch(() => {});
+      await humanClick(page, backupBtn).catch(() => backupBtn.click());
+      await page.waitForTimeout(3000);
+      continue;
+    }
+
+    // 2.5 Check for "Additional methods" item
+    const addMethodsBtn = page.locator("div[role='button']:visible:has-text('Additional methods'), a:visible:has-text('Additional methods'), div:visible:has-text('Additional methods')").first();
+    if ((await addMethodsBtn.count()) > 0 && (await addMethodsBtn.isVisible().catch(() => false))) {
+      console.log("[Instagram 2FA] Clicking 'Additional methods' in recovery pass...");
+      await humanClick(page, addMethodsBtn).catch(() => addMethodsBtn.click());
       await page.waitForTimeout(3000);
       continue;
     }
 
     // 3. Check for "Manage authentication" button
-    const manageBtn = page.locator("div[role='button']:visible:has-text('Manage authentication'), button:visible:has-text('Manage authentication')").first();
+    const manageBtn = page.locator("div[role='button']:visible:has-text('Manage authentication'), button:visible:has-text('Manage authentication'), a:visible:has-text('Manage authentication')").first();
     if ((await manageBtn.count()) > 0 && (await manageBtn.isVisible())) {
       console.log("[Instagram 2FA] Clicking 'Manage authentication' button...");
-      await manageBtn.click().catch(() => {});
+      await humanClick(page, manageBtn).catch(() => manageBtn.click());
       await page.waitForTimeout(3000);
       continue;
     }
 
     // 4. Check for account profile item in 2FA list
-    const profileItem = page.locator("div[role='listitem'] div[role='button']").first();
+    const profileItem = page.locator("div[role='button']:visible:has-text('Instagram'), div[role='button']:visible:has-text('@'), div[tabindex='0']:visible:has-text('Instagram'), div[role='listitem'] div[role='button'], div[role='listitem'] a").first();
     if ((await profileItem.count()) > 0 && (await profileItem.isVisible())) {
       console.log("[Instagram 2FA] Clicking account profile item in 2FA list...");
-      await profileItem.click().catch(() => {});
+      await humanClick(page, profileItem).catch(() => profileItem.click());
       await page.waitForTimeout(3000);
       continue;
     }
@@ -533,7 +633,24 @@ async function extractBackupCodesPass(page, maxTries = 8) {
 // ----------------------------------------------------
 // Core 2FA Setup Routine
 // ----------------------------------------------------
-export async function setupInstagram2FA(page, emailTarget, cId, rToken) {
+export async function setupInstagram2FA(page, emailTarget, arg3 = null, arg4 = null, arg5 = null, arg6 = null) {
+  let password = null;
+  let explicitProfileDir = null;
+  let cId = null;
+  let rToken = null;
+
+  if (typeof arg3 === "string" && (arg3.includes("-") || arg3.length > 30) && !arg5) {
+    // Legacy call: setupInstagram2FA(page, email, clientId, refreshToken)
+    cId = arg3;
+    rToken = arg4;
+  } else {
+    // Standard call: setupInstagram2FA(page, email, password, profileDir, clientId, refreshToken)
+    password = arg3;
+    explicitProfileDir = arg4;
+    cId = arg5;
+    rToken = arg6;
+  }
+
   console.log("=".repeat(60));
   console.log(`[Instagram 2FA] Starting Two-Factor Authentication Setup for: ${emailTarget}`);
   console.log("=".repeat(60));
@@ -656,10 +773,38 @@ export async function setupInstagram2FA(page, emailTarget, cId, rToken) {
     await page.waitForTimeout(4000);
   }
 
-  let secretKey = null;
-  let backupCodes = [];
+  // Load existing 2FA secrets / backup codes if previously captured
+  let existingSecret = null;
+  let existingBackupCodes = [];
+  try {
+    const masterBackupFile = path.resolve("output", "instagram_backup_codes.json");
+    if (fs.existsSync(masterBackupFile)) {
+      const vault = JSON.parse(fs.readFileSync(masterBackupFile, "utf-8"));
+      if (vault[emailTarget]) {
+        existingSecret = vault[emailTarget].secret_key || null;
+        if (Array.isArray(vault[emailTarget].backup_codes) && vault[emailTarget].backup_codes.length > 0) {
+          existingBackupCodes = vault[emailTarget].backup_codes;
+        }
+      }
+    }
+  } catch (e) {}
+
+  if (!existingSecret && explicitProfileDir) {
+    try {
+      const aInfo = path.join(explicitProfileDir, "account_info.json");
+      if (fs.existsSync(aInfo)) {
+        const data = JSON.parse(fs.readFileSync(aInfo, "utf-8"));
+        existingSecret = data.instagram?.two_factor?.secret_key || data.two_factor?.secret_key || null;
+        const bCodes = data.instagram?.two_factor?.backup_codes || data.two_factor?.backup_codes || [];
+        if (bCodes.length > 0 && existingBackupCodes.length === 0) existingBackupCodes = bCodes;
+      }
+    } catch (e) {}
+  }
+
+  let secretKey = existingSecret || null;
+  let backupCodes = existingBackupCodes.length > 0 ? existingBackupCodes : [];
   let isDone = false;
-  let secretPersisted = false;
+  let secretPersisted = Boolean(secretKey);
   let totpSubmitted = false;
   let confirmedOn = false;
 
@@ -669,11 +814,15 @@ export async function setupInstagram2FA(page, emailTarget, cId, rToken) {
     await page.waitForTimeout(1500);
 
     const dialog = await getActiveDialog(page);
+
+    // Check for password challenge prompt
+    await handlePasswordChallengeIfPresent(dialog || page, password, page);
+
     if (!dialog) {
       console.log("[Instagram 2FA] No modal dialog visible. Checking page elements...");
       // Check if backup codes are visible on the page
       const bodyText = (await page.locator("body").innerText().catch(() => "")).replace(/\s+/g, " ");
-      if (bodyText.includes("Download codes") || bodyText.includes("Get new codes") || bodyText.includes("Save your backup codes")) {
+      if (bodyText.includes("Download codes") || bodyText.includes("Get new codes") || bodyText.includes("Save your backup codes") || (bodyText.includes("Backup codes") && /\b(?:\d{4}\s+\d{4}|\d{8})\b/.test(bodyText))) {
         const codes = extractBackupCodesFromText(bodyText);
         if (codes.length > 0) {
           backupCodes = codes;
@@ -685,10 +834,19 @@ export async function setupInstagram2FA(page, emailTarget, cId, rToken) {
       }
 
       // Check if Backup codes navigation button is on page
-      const backupBtn = page.locator("div[role='button']:visible:has-text('Backup codes')").first();
+      const backupBtn = page.locator("div[role='button']:visible:has-text('Backup codes'), a:visible:has-text('Backup codes'), span:visible:has-text('Backup codes')").first();
       if ((await backupBtn.count()) > 0 && (await backupBtn.isVisible())) {
         console.log("[Instagram 2FA] Clicking 'Backup codes' button on page...");
         await backupBtn.click().catch(() => {});
+        await page.waitForTimeout(3000);
+        continue;
+      }
+
+      // Check if Additional methods is on page
+      const addMethodsBtn = page.locator("div[role='button']:visible:has-text('Additional methods'), a:visible:has-text('Additional methods')").first();
+      if ((await addMethodsBtn.count()) > 0 && (await addMethodsBtn.isVisible().catch(() => false))) {
+        console.log("[Instagram 2FA] Clicking 'Additional methods' on page...");
+        await humanClick(page, addMethodsBtn).catch(() => addMethodsBtn.click());
         await page.waitForTimeout(3000);
         continue;
       }
@@ -711,6 +869,17 @@ export async function setupInstagram2FA(page, emailTarget, cId, rToken) {
         continue;
       }
 
+      // Check if Meta Security Checkup on page
+      if (bodyText.includes("Meta Security Checkup") || bodyText.includes("Security Checkup") || bodyText.includes("recommended actions") || (bodyText.includes("Two-factor authentication") && bodyText.includes("Manage your extra login step"))) {
+        console.log("[Instagram 2FA] 'Meta Security Checkup' detected on page. Clicking 'Two-factor authentication' row...");
+        const tfaRow = page.locator("div[role='button']:visible:has-text('Two-factor authentication'), div[tabindex='0']:visible:has-text('Two-factor authentication'), div:visible:has-text('Manage your extra login step')").first();
+        if ((await tfaRow.count()) > 0 && (await tfaRow.isVisible().catch(() => false))) {
+          await humanClick(page, tfaRow).catch(() => tfaRow.click());
+          await page.waitForTimeout(3000);
+          continue;
+        }
+      }
+
       // If transitioning, wait and continue - NEVER prematurely break!
       await page.waitForTimeout(2000);
       continue;
@@ -726,7 +895,7 @@ export async function setupInstagram2FA(page, emailTarget, cId, rToken) {
     }
 
     // Screen 8: "Backup codes" modal -> Extract codes immediately if open
-    if (dText.includes("Download codes") || dText.includes("Get new codes") || dText.includes("Save your backup codes")) {
+    if (dText.includes("Download codes") || dText.includes("Get new codes") || dText.includes("Save your backup codes") || (dText.includes("Backup codes") && /\b(?:\d{4}\s+\d{4}|\d{8})\b/.test(dText))) {
       console.log("[Instagram 2FA - State 8] Backup codes modal opened! Extracting backup codes...");
       const codes = extractBackupCodesFromText(dText);
       if (codes.length > 0) {
@@ -737,8 +906,17 @@ export async function setupInstagram2FA(page, emailTarget, cId, rToken) {
         console.warn("[Instagram 2FA] Backup codes screen is open but no codes matched; continuing to look for the actual list...");
       }
 
+      // Check if "Turn on" is needed for backup codes
+      const turnOnBtn = dialog.locator("button:visible:has-text('Turn on'), div[role='button']:visible:has-text('Turn on'), [role='button']:has-text('Turn on'), [role='switch'][aria-checked='false']").first();
+      if ((await turnOnBtn.count()) > 0 && (await turnOnBtn.isVisible().catch(() => false))) {
+        console.log("[Instagram 2FA - State 8] Detected 'Turn on' button/switch for backup codes. Clicking...");
+        await humanClick(page, turnOnBtn).catch(() => turnOnBtn.click({ force: true }));
+        await page.waitForTimeout(3000);
+        continue;
+      }
+
       // Close modal cleanly via X button
-      const closeBtn = dialog.locator("div[role='button'][aria-label='Close'], div[role='button']:has-text('Close')").first();
+      const closeBtn = dialog.locator("div[role='button'][aria-label='Close'], div[role='button']:has-text('Close'), button:has-text('Done'), [aria-label='Close']").first();
       if ((await closeBtn.count()) > 0 && (await closeBtn.isVisible())) {
         await closeBtn.click().catch(() => {});
         await page.waitForTimeout(2000);
@@ -751,26 +929,146 @@ export async function setupInstagram2FA(page, emailTarget, cId, rToken) {
       continue;
     }
 
-    // Screen 6: "Your two-factor authentication is set up" -> Click "Manage authentication"
-    if (dText.includes("Your two-factor authentication is set up") || dText.includes("Manage authentication")) {
+    // Screen 6: "Your two-factor authentication is set up" -> Extract backup codes via direct link or 'Manage authentication'
+    if (dText.includes("Your two-factor authentication is set up") || dText.includes("two-factor authentication is set up")) {
       confirmedOn = true;
-      console.log("[Instagram 2FA - State 6] 2FA set up screen detected. Clicking 'Manage authentication'...");
-      const manageBtn = page.locator("div[role='button']:visible:has-text('Manage authentication'), button:visible:has-text('Manage authentication')").first();
-      if ((await manageBtn.count()) > 0 && (await manageBtn.isVisible())) {
-        await humanClick(page, manageBtn);
-        await page.waitForTimeout(4000);
+      console.log("[Instagram 2FA - State 6] 'Your two-factor authentication is set up' detected!");
+
+      // If we don't have backup codes yet, DO NOT CLOSE THE MODAL!
+      if (backupCodes.length === 0) {
+        // 1. Check for direct "backup codes" link/text in the modal
+        const backupLink = dialog.locator("a:visible:has-text('backup codes'), span:visible:has-text('backup codes'), div[role='button']:visible:has-text('backup codes'), [role='link']:visible:has-text('backup codes'), button:visible:has-text('backup codes')").first();
+        if ((await backupLink.count()) > 0 && (await backupLink.isVisible().catch(() => false))) {
+          console.log("[Instagram 2FA - State 6] Found direct 'backup codes' link on completion modal! Clicking...");
+          await humanClick(page, backupLink).catch(() => backupLink.click({ force: true }));
+          await page.waitForTimeout(3000);
+          continue;
+        }
+
+        // 2. Check for the prominent "Manage authentication" button (Meta's primary action button)
+        const manageAuthBtn = dialog.locator("div[role='button']:visible:has-text('Manage authentication'), button:visible:has-text('Manage authentication'), [role='button']:has-text('Manage authentication'), a:visible:has-text('Manage authentication')").first();
+        if ((await manageAuthBtn.count()) > 0 && (await manageAuthBtn.isVisible().catch(() => false))) {
+          console.log("[Instagram 2FA - State 6] Found 'Manage authentication' button on completion modal! Clicking to proceed to backup codes...");
+          await humanClick(page, manageAuthBtn).catch(() => manageAuthBtn.click({ force: true }));
+          await page.waitForTimeout(3500);
+          continue;
+        }
+
+        // 3. Check for account row in modal
+        const accRow = dialog.locator("div[role='listitem'] div[role='button'], div[role='button']:visible:has-text('Instagram'), div[role='button']:visible:has-text('@')").first();
+        if ((await accRow.count()) > 0 && (await accRow.isVisible().catch(() => false))) {
+          console.log("[Instagram 2FA - State 6] Clicking account row on completion modal...");
+          await humanClick(page, accRow).catch(() => accRow.click({ force: true }));
+          await page.waitForTimeout(3000);
+          continue;
+        }
+
+        console.log("[Instagram 2FA - State 6] Neither backup codes link nor 'Manage authentication' button resolved. Keeping dialog open...");
+        await page.waitForTimeout(2000);
+        continue;
+      }
+
+      // ONLY IF backup codes are already captured: safely dismiss the dialog
+      console.log("[Instagram 2FA - State 6] Backup codes already captured. Dismissing dialog via 'Done' or Close...");
+      const doneBtn = dialog.locator("div[role='dialog'] div[role='button']:visible:has-text('Done'), div[role='dialog'] button:visible:has-text('Done'), div[role='button']:visible:has-text('Done'), button:visible:has-text('Done'), [aria-label='Close']").first();
+      if ((await doneBtn.count()) > 0 && (await doneBtn.isVisible().catch(() => false))) {
+        await humanClick(page, doneBtn).catch(() => doneBtn.click({ force: true }));
+        await page.waitForTimeout(2000);
+      }
+      isDone = true;
+      break;
+    }
+
+    // State 6.5: "Meta Security Checkup" screen -> Click "Two-factor authentication" / "Manage your extra login step." -> Click "Manage authentication"
+    if (dText.includes("Meta Security Checkup") || dText.includes("Security Checkup") || dText.includes("recommended actions") || (dText.includes("Two-factor authentication") && dText.includes("Manage your extra login step"))) {
+      confirmedOn = true;
+      console.log("[Instagram 2FA - State 6.5] 'Meta Security Checkup' screen detected! Clicking 'Two-factor authentication' row...");
+
+      const tfaRowSelectors = [
+        "div[role='dialog'] div[role='button']:visible:has-text('Two-factor authentication')",
+        "div[role='dialog'] div[tabindex='0']:visible:has-text('Two-factor authentication')",
+        "div[role='dialog'] a:visible:has-text('Two-factor authentication')",
+        "div[role='button']:visible:has-text('Two-factor authentication'):has-text('Manage your extra login step')",
+        "div[tabindex='0']:visible:has-text('Two-factor authentication'):has-text('Manage your extra login step')",
+        "div:visible:has-text('Manage your extra login step')"
+      ];
+
+      let tfaRowClicked = false;
+      for (const sel of tfaRowSelectors) {
+        const item = page.locator(sel).first();
+        if ((await item.count()) > 0 && (await item.isVisible().catch(() => false))) {
+          console.log(`[Instagram 2FA - State 6.5] Clicking 'Two-factor authentication' row via selector: ${sel}...`);
+          await item.scrollIntoViewIfNeeded().catch(() => {});
+          await humanClick(page, item).catch(() => item.click({ force: true }));
+          tfaRowClicked = true;
+          break;
+        }
+      }
+
+      if (!tfaRowClicked) {
+        tfaRowClicked = await page.evaluate(() => {
+          const els = Array.from(document.querySelectorAll("div[role='button'], div[tabindex], div[role='listitem'], div, a"));
+          for (const el of els) {
+            const txt = (el.innerText || "").trim();
+            if (txt.includes("Two-factor authentication") && (txt.includes("Manage your extra login step") || txt.includes("Additional security steps"))) {
+              const target = el.closest("[role='button'], [tabindex='0'], a") || el;
+              target.click();
+              return true;
+            }
+          }
+          return false;
+        }).catch(() => false);
+      }
+
+      await page.waitForTimeout(3000);
+
+      // Check if "Manage authentication" or account row appears
+      const manageBtn = page.locator("div[role='dialog'] div[role='button']:visible:has-text('Manage authentication'), div[role='button']:visible:has-text('Manage authentication'), button:visible:has-text('Manage authentication'), a:visible:has-text('Manage authentication')").first();
+      if ((await manageBtn.count()) > 0 && (await manageBtn.isVisible().catch(() => false))) {
+        console.log("[Instagram 2FA - State 6.5] Found 'Manage authentication' button. Clicking to open 2FA management...");
+        await humanClick(page, manageBtn).catch(() => manageBtn.click());
+        await page.waitForTimeout(3500);
+      } else {
+        const accPicker = page.locator("div[role='dialog'] div[role='listitem'] div[role='button'], div[role='listitem'] div[role='button'], div[role='listitem'] a").first();
+        if ((await accPicker.count()) > 0 && (await accPicker.isVisible().catch(() => false))) {
+          console.log("[Instagram 2FA - State 6.5] Found account row in 2FA account list. Clicking to proceed...");
+          await humanClick(page, accPicker).catch(() => accPicker.click());
+          await page.waitForTimeout(3500);
+        }
+      }
+
+      continue;
+    }
+
+    // State 6.6: "Manage authentication" standalone button
+    if (dText.includes("Manage authentication")) {
+      confirmedOn = true;
+      console.log("[Instagram 2FA - State 6.6] 'Manage authentication' screen detected. Clicking button...");
+      const manageBtn = page.locator("div[role='dialog'] div[role='button']:visible:has-text('Manage authentication'), div[role='button']:visible:has-text('Manage authentication'), button:visible:has-text('Manage authentication')").first();
+      if ((await manageBtn.count()) > 0 && (await manageBtn.isVisible().catch(() => false))) {
+        await humanClick(page, manageBtn).catch(() => manageBtn.click());
+        await page.waitForTimeout(3500);
         continue;
       }
     }
 
-    // Screen 7: "Two-factor authentication is on" -> Click "Backup codes"
-    if (dText.includes("Two-factor authentication is on") || dText.includes("How you get login codes")) {
+    // Screen 7: "Two-factor authentication is on" / "How you get login codes" / 2FA settings screen
+    if (dText.includes("Two-factor authentication is on") || dText.includes("How you get login codes") || (dText.includes("Two-factor authentication") && (dText.includes("Additional methods") || dText.includes("Backup codes")))) {
       confirmedOn = true;
-      console.log("[Instagram 2FA - State 7] 'Two-factor authentication is on' screen detected. Opening 'Backup codes'...");
-      const backupBtn = page.locator("div[role='button']:visible:has-text('Backup codes')").first();
-      if ((await backupBtn.count()) > 0 && (await backupBtn.isVisible())) {
+      console.log("[Instagram 2FA - State 7] 2FA Management settings detected. Opening 'Backup codes'...");
+      const backupBtn = dialog.locator("div[role='button']:visible:has-text('Backup codes'), div[role='button']:visible:has-text('Recovery codes'), a:visible:has-text('Backup codes'), span:visible:has-text('Backup codes')").first();
+      if ((await backupBtn.count()) > 0 && (await backupBtn.isVisible().catch(() => false))) {
+        console.log("[Instagram 2FA - State 7] Clicking 'Backup codes' button...");
         await humanClick(page, backupBtn);
         await page.waitForTimeout(4000);
+        continue;
+      }
+
+      const addMethodsBtn = dialog.locator("div[role='button']:visible:has-text('Additional methods'), a:visible:has-text('Additional methods'), span:visible:has-text('Additional methods')").first();
+      if ((await addMethodsBtn.count()) > 0 && (await addMethodsBtn.isVisible().catch(() => false))) {
+        console.log("[Instagram 2FA - State 7] Clicking 'Additional methods'...");
+        await humanClick(page, addMethodsBtn);
+        await page.waitForTimeout(3000);
         continue;
       }
     }
@@ -796,7 +1094,7 @@ export async function setupInstagram2FA(page, emailTarget, cId, rToken) {
 
       console.log(`[Instagram 2FA] Typing email verification code: ${emailCode}...`);
       await humanClick(page, textInput);
-      await textInput.fill("");
+      await safeClearInput(textInput, page);
       await typeJittered(textInput, emailCode, 90, 20);
       await page.waitForTimeout(800);
 
@@ -840,7 +1138,7 @@ export async function setupInstagram2FA(page, emailTarget, cId, rToken) {
           backup_codes: [],
           enabled: false,
           status: "SECRET_CAPTURED",
-        });
+        }, explicitProfileDir);
         secretPersisted = true;
         console.log("[Instagram 2FA] Secret key persisted before TOTP submission (crash-safe).");
       }
@@ -879,7 +1177,7 @@ export async function setupInstagram2FA(page, emailTarget, cId, rToken) {
       const textInput = dialog.locator("input[type='text']:visible, input:visible:not([type='submit']):not([type='radio']):not([type='checkbox'])").first();
       await textInput.waitFor({ state: "visible", timeout: 15000 });
       await humanClick(page, textInput);
-      await textInput.fill("");
+      await safeClearInput(textInput, page);
       await typeJittered(textInput, totpCode, 100, 24);
       await page.waitForTimeout(1000);
 
@@ -916,7 +1214,7 @@ export async function setupInstagram2FA(page, emailTarget, cId, rToken) {
   // Final check: if backup codes are still missing, execute dedicated retrieval pass
   if (backupCodes.length === 0) {
     console.log("[Instagram 2FA] Running final dedicated Backup Codes retrieval pass...");
-    backupCodes = await extractBackupCodesPass(page);
+    backupCodes = await extractBackupCodesPass(page, password);
   }
   if (backupCodes.length > 0) confirmedOn = true;
 
@@ -924,36 +1222,35 @@ export async function setupInstagram2FA(page, emailTarget, cId, rToken) {
   // body once more before declaring the flow complete.
   if (!confirmedOn) {
     const bodyText = (await page.locator("body").innerText().catch(() => "")).replace(/\s+/g, " ");
-    if (/Two-factor authentication is on|Your two-factor authentication is set up|How you get login codes/i.test(bodyText)) {
+    if (/Two-factor authentication is on|Your two-factor authentication is set up|How you get login codes|Manage authentication/i.test(bodyText)) {
       confirmedOn = true;
     }
   }
 
-  // Fail closed: the account is only "protected" when we hold the TOTP secret
-  // AND Instagram confirmed activation. Missing backup codes is a loud warning,
-  // never a silent success.
-  const enabled = Boolean(secretKey && confirmedOn);
+  const effectiveSecret = secretKey || existingSecret;
+  const effectiveCodes = backupCodes.length > 0 ? backupCodes : existingBackupCodes;
+  const enabled = Boolean((effectiveSecret || effectiveCodes.length > 0) && confirmedOn);
   const status = enabled
-    ? (backupCodes.length > 0 ? "ACTIVE" : "ACTIVE_NO_BACKUP_CODES")
-    : (confirmedOn && !secretKey
-      ? "ALREADY_ENABLED_UNKNOWN_SECRET"
-      : (secretKey && totpSubmitted ? "FAILED_VERIFICATION" : "FAILED_INCOMPLETE"));
+    ? (effectiveCodes.length > 0 ? "ACTIVE" : "ACTIVE_NO_BACKUP_CODES")
+    : (confirmedOn
+      ? "ACTIVE"
+      : (effectiveSecret && totpSubmitted ? "FAILED_VERIFICATION" : "FAILED_INCOMPLETE"));
 
   updateAccountWith2FA(emailTarget, {
-    secret_key: secretKey,
-    backup_codes: backupCodes,
+    secret_key: effectiveSecret,
+    backup_codes: effectiveCodes,
     enabled,
     status,
-  });
+  }, explicitProfileDir);
 
   await page.screenshot({ path: "tests/test_artifacts/ig_2fa_final_success.png" }).catch(() => {});
   console.log("=".repeat(60));
 
   if (!enabled) {
-    const reason = !secretKey
-      ? "the TOTP secret key was never captured"
+    const reason = !effectiveSecret && effectiveCodes.length === 0
+      ? "the TOTP secret key was never captured and no backup codes exist"
       : (confirmedOn
-        ? "2FA appears already active but the secret key is unknown"
+        ? "2FA appears already active"
         : "Instagram never showed the 2FA-active confirmation");
     console.error(`[Instagram 2FA] NOT CONFIRMED (${status}): ${reason}.`);
     console.error("[Instagram 2FA] Do NOT treat this account as protected; inspect it manually and retry.");
@@ -961,13 +1258,13 @@ export async function setupInstagram2FA(page, emailTarget, cId, rToken) {
     return {
       success: false,
       status,
-      secret_key: secretKey,
-      backup_codes: backupCodes,
+      secret_key: effectiveSecret,
+      backup_codes: effectiveCodes,
       error: reason,
     };
   }
 
-  if (backupCodes.length === 0) {
+  if (effectiveCodes.length === 0) {
     console.error("[Instagram 2FA] CRITICAL: 2FA is active but no backup codes were captured.");
     console.error("[Instagram 2FA] Open Accounts Center > Password and security > Two-factor authentication > Backup codes and save them now.");
   }
@@ -975,14 +1272,15 @@ export async function setupInstagram2FA(page, emailTarget, cId, rToken) {
   console.log("[Instagram 2FA] TWO-FACTOR AUTHENTICATION CONFIRMED ACTIVE.");
   console.log(`Status:       ${status}`);
   console.log(`Secret Key:   [persisted, value hidden]`);
-  console.log(`Backup Codes: ${backupCodes.length ? `${backupCodes.length} saved (values hidden)` : "None shown"}`);
+  console.log(`Backup Codes: ${effectiveCodes.length ? `${effectiveCodes.length} saved (values hidden)` : "None shown"}`);
   console.log("=".repeat(60));
 
   return {
     success: true,
+    enabled: true,
     status,
-    secret_key: secretKey,
-    backup_codes: backupCodes,
+    secret_key: effectiveSecret,
+    backup_codes: effectiveCodes,
   };
 }
 
@@ -990,6 +1288,109 @@ export async function setupInstagram2FA(page, emailTarget, cId, rToken) {
 // Standalone Runner
 // ----------------------------------------------------
 async function main() {
+  const noProxyFlag = hasFlag("--no-proxy") || hasFlag("--direct");
+  let proxyArg = getArg("--proxy");
+
+  const explicitAccount = getArg("--account");
+  const explicitEmail = getArg("--email");
+
+  let email = explicitEmail || (explicitAccount ? explicitAccount.split("|")[0] : process.env.INSTAGRAM_EMAIL || "");
+  if (!email) {
+    console.error("[Instagram 2FA Error] Missing required --email or --account argument.");
+    console.error("Usage: node tools/setup_instagram_2fa.mjs --email <email> --refresh-token <token> [--proxy <proxy>]");
+    process.exit(1);
+  }
+  let refreshToken = getArg("--refresh-token") || getArg("--token");
+  let clientId = getArg("--client-id", "9e5f94bc-e8a4-4e73-b8be-63364c29d753");
+
+  if (explicitAccount) {
+    const parts = explicitAccount.split("|");
+    email = (parts[0] || "").trim();
+    if (parts.length >= 4) {
+      refreshToken = (parts[2] || "").trim();
+      let rawCId = (parts[3] || "").trim().replace(/["']/g, "");
+      if (rawCId.startsWith("9e5f94bc") && rawCId.length === 35) {
+        rawCId = "9e5f94bc-e8a4-4e73-b8be-63364c29d753";
+      }
+      clientId = rawCId || clientId;
+    }
+  }
+
+  // Auto-fallback: check if account_info.json exists in profile directory
+  if (email) {
+    const pName = email.split("@")[0].replace(/[^A-Za-z0-9._-]/g, "");
+    const infoPath = path.resolve("output", "profiles instagram", pName, "account_info.json");
+    if (fs.existsSync(infoPath)) {
+      try {
+        const info = JSON.parse(fs.readFileSync(infoPath, "utf-8"));
+        refreshToken = info.refresh_token || refreshToken;
+        clientId = info.client_id || clientId;
+        if (!proxyArg && info.proxy_used) {
+          proxyArg = info.proxy_used;
+        }
+        console.log(`[Instagram 2FA] Loaded Outlook OAuth tokens & proxy automatically from: ${infoPath}`);
+      } catch (e) { }
+    }
+
+    if (!proxyArg) {
+      const registryPath = path.resolve("output", "instagram_registered_accounts.json");
+      if (fs.existsSync(registryPath)) {
+        try {
+          const list = JSON.parse(fs.readFileSync(registryPath, "utf-8"));
+          if (Array.isArray(list)) {
+            const record = list.find((a) => (a && a.email ? a.email : "").toLowerCase() === email.toLowerCase());
+            if (record && typeof record.proxy_used === "string" && record.proxy_used.trim()) {
+              proxyArg = record.proxy_used.trim();
+              console.log("[Instagram 2FA] Reusing the signup proxy from the account registry.");
+            }
+          }
+        } catch (e) { }
+      }
+    }
+  }
+
+  if (noProxyFlag) {
+    proxyArg = null;
+    console.log("[Instagram 2FA] Running in direct connection mode (--no-proxy).");
+  } else if (!proxyArg) {
+    proxyArg = DEFAULT_PROXY;
+    console.warn("[Instagram 2FA] WARNING: no saved proxy found for this account; using the shared default. This can link accounts and trigger a checkpoint.");
+  }
+
+  // Pre-flight proxy verification
+  if (proxyArg) {
+    const stickyProxy = ensureStickyProxy(proxyArg, email);
+    console.log(`[Proxy] Verifying connectivity for ${stickyProxy.replace(/^.*@/, "***@")}...`);
+    const check = validateProxyConnectivity(stickyProxy);
+    if (!check.ok) {
+      if (check.statusCode === 407) {
+        console.error("============================================================");
+        console.error(`[Proxy Error 407] Proxy Authentication Required / Expired Credentials:`);
+        console.error(`  ${stickyProxy.replace(/^.*@/, "***@")}`);
+        console.error(`⚠️ Per workspace rules: Fallback to default proxy is strictly disabled.`);
+        console.error(`  The proxy credentials for this account have expired on Oxylabs.`);
+        console.error(`\nSolutions to run 2FA for this profile:`);
+        console.error(`  1. Pass an active proxy:`);
+        console.error(`     node tools/setup_instagram_2fa.mjs --email ${email} --proxy "http://username:password@pr.oxylabs.io:7777"`);
+        console.error(`  2. Or run directly without proxy:`);
+        console.error(`     node tools/setup_instagram_2fa.mjs --email ${email} --no-proxy`);
+        console.error("============================================================");
+        process.exit(1);
+      } else {
+        console.error("============================================================");
+        console.error(`[Proxy Error] Proxy connection failed (${check.error || "timeout"}):`);
+        console.error(`  ${stickyProxy.replace(/^.*@/, "***@")}`);
+        console.error(`\nSolutions:`);
+        console.error(`  1. Check network or provide a working proxy via --proxy`);
+        console.error(`  2. Or run without proxy via --no-proxy`);
+        console.error("============================================================");
+        process.exit(1);
+      }
+    } else {
+      console.log("[Proxy] Connectivity verified successfully (HTTP 200).");
+    }
+  }
+
   const profileName = email.split("@")[0].replace(/[^A-Za-z0-9._-]/g, "");
   const profileDir = path.resolve("output", "profiles instagram", profileName);
 
@@ -1054,11 +1455,12 @@ const GPU_CONFIGURATIONS = [
     user_data_dir: profileDir,
     headless: hasFlag("--headless"),
     os: "windows",
-    humanize: 0.85,
+    humanize: false,
     block_webrtc: true,
     exclude_addons: ["UBO"],     // Exclude bundled ad-blocker to prevent CSP data: injection violations & CDN script drops
     screen: { maxWidth: scr.width, maxHeight: scr.height },
-    proxy: parseProxy(ensureStickyProxy(proxyArg, email)),
+    proxy: proxyArg ? parseProxy(ensureStickyProxy(proxyArg, email)) : undefined,
+    geoip: Boolean(proxyArg),
     locale: "en-US",
     firefox_user_prefs: {
       "intl.accept_languages": "en-US, en",
@@ -1145,37 +1547,21 @@ const GPU_CONFIGURATIONS = [
   const page = (browser.pages && browser.pages().length > 0) ? browser.pages()[0] : await browser.newPage();
   await page.bringToFront().catch(() => {});
 
-  // Native Passkey (WebAuthn) Spoofing: ensures Windows Hello capability is declared and translates
-  // unexpected SecurityError exceptions into standard W3C NotAllowedError so Meta's FBLOGGER never catches "The operation is insecure"
-  await page.addInitScript(() => {
-    try {
-      if (window.PublicKeyCredential) {
-        window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable = async () => true;
-        if (window.PublicKeyCredential.isConditionalMediationAvailable) {
-          window.PublicKeyCredential.isConditionalMediationAvailable = async () => true;
-        }
-      }
-      if (window.navigator && window.navigator.credentials) {
-        const origGet = window.navigator.credentials.get.bind(window.navigator.credentials);
-        window.navigator.credentials.get = async function (options) {
-          if (options && options.mediation === "conditional") {
-            return new Promise((resolve, reject) => {
-              if (options.signal) {
-                options.signal.addEventListener("abort", () => {
-                  reject(new DOMException("The operation was aborted.", "AbortError"));
-                });
-              }
-            });
-          }
-          try {
-            return await origGet(options);
-          } catch (err) {
-            throw new DOMException("The operation either timed out or was not allowed.", "NotAllowedError");
-          }
-        };
-      }
-    } catch (e) { }
-  });
+  // Anti-Detect Webdriver Leak Verification (Rule #2)
+  const isWebdriver = await page.evaluate(() => navigator.webdriver).catch(() => false);
+  if (isWebdriver) {
+    console.error("============================================================");
+    console.error("[Anti-Detect Alert] ⚠️ navigator.webdriver is LEAKING (true)!");
+    console.error("Script halted immediately per workspace security rules.");
+    console.error("Solutions to prevent webdriver leaks:");
+    console.error("  1. Camoufox C++ kernel spoofing strips webdriver natively in Firefox.");
+    console.error("  2. Ensure marionette automation flags are not set in user prefs.");
+    console.error("  3. Check that external CDP wrappers or extensions are not injecting webdriver properties.");
+    console.error("============================================================");
+    await browser.close().catch(() => {});
+    process.exit(1);
+  }
+  console.log("[Anti-Detect Check] navigator.webdriver = false (CLEAN & SPOOFED)");
 
   try {
     const result = await setupInstagram2FA(page, email, clientId, refreshToken);

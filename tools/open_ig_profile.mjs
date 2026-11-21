@@ -70,8 +70,37 @@ if (!profileName || profileName === "." || profileName === "..") {
   process.exit(1);
 }
 
-const DEFAULT_PROXY = "customer-mobile_83bd2e52:DPD~dmUeZ1~p@pr.oxylabs.io:7777";
+const DEFAULT_PROXY = process.env.OXYLABS_MOBILE_PROXY || process.env.OXYLABS_PROXY || "";
+const noProxyFlag = args.includes("--no-proxy") || args.includes("--direct");
 let proxyStr = getArg("--proxy");
+
+function validateProxyConnectivity(proxy, timeoutMs = 7000) {
+  if (!proxy) return { ok: true };
+  const clean = String(proxy).trim();
+  const nullDevice = process.platform === "win32" ? "NUL" : "/dev/null";
+  try {
+    const code = execFileSync(
+      "curl.exe",
+      ["-sS", "-o", nullDevice, "-w", "%{http_code}", "--connect-timeout", "5", "-x", clean, "https://icanhazip.com"],
+      { encoding: "utf-8", timeout: timeoutMs, stdio: ["pipe", "pipe", "pipe"] }
+    ).trim();
+    if (code === "200") {
+      return { ok: true, statusCode: 200 };
+    }
+    if (code === "407") {
+      return { ok: false, statusCode: 407, error: "HTTP 407 Proxy Authentication Required" };
+    }
+    return { ok: false, statusCode: Number(code) || 0, error: `Proxy returned HTTP status ${code}` };
+  } catch (err) {
+    const stdout = (err.stdout ? String(err.stdout) : "").trim();
+    const stderr = (err.stderr ? String(err.stderr) : "").trim();
+    const combined = `${stdout} ${stderr} ${err.message || ""}`;
+    if (/407/i.test(combined) || stdout === "407") {
+      return { ok: false, statusCode: 407, error: `HTTP 407 Proxy Authentication Required (${stderr || stdout || "407"})` };
+    }
+    return { ok: false, error: stderr || err.message };
+  }
+}
 
 function ensureStickyProxy(proxyStr, seed = null) {
   if (!proxyStr) return proxyStr;
@@ -154,9 +183,46 @@ if (!proxyStr) {
   }
 }
 
-if (!proxyStr) {
+if (noProxyFlag) {
+  proxyStr = null;
+  console.log("[Instagram] Running in direct connection mode (--no-proxy).");
+} else if (!proxyStr) {
   proxyStr = DEFAULT_PROXY;
   console.warn("[Instagram] WARNING: no saved proxy found for this account; using the shared default. This can link accounts and trigger a checkpoint.");
+}
+
+// Pre-flight proxy verification
+if (proxyStr) {
+  const stickyProxy = ensureStickyProxy(proxyStr, profileName);
+  console.log(`[Proxy] Verifying connectivity for ${stickyProxy.replace(/^.*@/, "***@")}...`);
+  const check = validateProxyConnectivity(stickyProxy);
+  if (!check.ok) {
+    if (check.statusCode === 407) {
+      console.error("============================================================");
+      console.error(`[Proxy Error 407] Proxy Authentication Required / Expired Credentials:`);
+      console.error(`  ${stickyProxy.replace(/^.*@/, "***@")}`);
+      console.error(`⚠️ Per workspace rules: Fallback to default proxy is strictly disabled.`);
+      console.error(`  The proxy credentials for this account have expired on Oxylabs.`);
+      console.error(`\nSolutions to launch this profile:`);
+      console.error(`  1. Pass an active proxy:`);
+      console.error(`     node tools/open_ig_profile.mjs --profile ${profileName} --proxy "http://username:password@pr.oxylabs.io:7777"`);
+      console.error(`  2. Or launch directly without proxy:`);
+      console.error(`     node tools/open_ig_profile.mjs --profile ${profileName} --no-proxy`);
+      console.error("============================================================");
+      process.exit(1);
+    } else {
+      console.error("============================================================");
+      console.error(`[Proxy Error] Proxy connection failed (${check.error || "timeout"}):`);
+      console.error(`  ${stickyProxy.replace(/^.*@/, "***@")}`);
+      console.error(`\nSolutions:`);
+      console.error(`  1. Check network or provide a working proxy via --proxy`);
+      console.error(`  2. Or run without proxy via --no-proxy`);
+      console.error("============================================================");
+      process.exit(1);
+    }
+  } else {
+    console.log("[Proxy] Connectivity verified successfully (HTTP 200).");
+  }
 }
 
 const personaPath = path.join(profileDir, "persona.json");
@@ -267,7 +333,7 @@ const browserConfig = {
     "browser.urlbar.suggest.history": true,
     "browser.urlbar.suggest.topsites": true,
   },
-  geoip: true,
+  geoip: Boolean(proxyStr),
   fingerprint,
   i_know_what_im_doing: true,
   config: {
@@ -293,6 +359,22 @@ if (context) {
   ]).catch(() => {});
 }
 const page = (browser.pages && browser.pages().length > 0) ? browser.pages()[0] : await browser.newPage();
+
+// Anti-Detect Webdriver Leak Verification (Rule #2)
+const isWebdriver = await page.evaluate(() => navigator.webdriver).catch(() => false);
+if (isWebdriver) {
+  console.error("============================================================");
+  console.error("[Anti-Detect Alert] ⚠️ navigator.webdriver is LEAKING (true)!");
+  console.error("Script halted immediately per workspace security rules.");
+  console.error("Solutions to prevent webdriver leaks:");
+  console.error("  1. Camoufox C++ kernel spoofing strips webdriver natively in Firefox.");
+  console.error("  2. Ensure marionette automation flags are not set in user prefs.");
+  console.error("  3. Check that external CDP wrappers or extensions are not injecting webdriver properties.");
+  console.error("============================================================");
+  await browser.close().catch(() => {});
+  process.exit(1);
+}
+console.log("[Anti-Detect Check] navigator.webdriver = false (CLEAN & SPOOFED)");
 try {
   await page.goto("https://www.instagram.com/?hl=en", { waitUntil: "domcontentloaded", timeout: 45000 });
 } catch (err) {

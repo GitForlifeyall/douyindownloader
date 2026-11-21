@@ -30,7 +30,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import readline from "node:readline";
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import {
   humanGlide,
   humanClick,
@@ -51,6 +51,35 @@ const { Camoufox } = await import(CAMOUFOX_PATH);
 const FP_GENERATOR_PATH = "file:///C:/Users/rudra/AppData/Roaming/npm/node_modules/camoufox-cli/node_modules/fingerprint-generator/index.mjs";
 const { FingerprintGenerator } = await import(FP_GENERATOR_PATH);
 const FP_GENERATOR = new FingerprintGenerator({ browsers: ["firefox"], operatingSystems: ["windows"] });
+
+// ----------------------------------------------------
+// Instant Ctrl+C / SIGINT Graceful Termination Handler
+// ----------------------------------------------------
+let activeBrowser = null;
+let isExiting = false;
+
+async function forceCleanExit(signal = "SIGINT") {
+  if (isExiting) {
+    console.log(`\n[Process] Hard exit forced by user (${signal}). Halting immediately.`);
+    process.exit(130);
+  }
+  isExiting = true;
+  console.log(`\n[Process] Received ${signal} (Ctrl+C). Closing browser and stopping pipeline...`);
+  try {
+    if (activeBrowser) {
+      await Promise.race([
+        activeBrowser.close().catch(() => {}),
+        new Promise((r) => setTimeout(r, 1200))
+      ]);
+    }
+  } catch (e) {}
+  process.exit(signal === "SIGINT" ? 130 : 0);
+}
+
+process.on("SIGINT", () => forceCleanExit("SIGINT"));
+process.on("SIGTERM", () => forceCleanExit("SIGTERM"));
+process.on("SIGHUP", () => forceCleanExit("SIGHUP"));
+
 
 // Pinned Camoufox User-Agent for 100% Wire/DOM Parity with C++ Engine
 const CAMOUFOX_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:158.0) Gecko/20100101 Firefox/158.0";
@@ -83,6 +112,22 @@ const SCREEN_RESOLUTIONS = [
 ];
 
 // Parse CLI args
+async function alignFrozenUserAgent(page, fingerprint, fingerprintPath) {
+  try {
+    const actualUa = await page.evaluate(() => navigator.userAgent);
+    if (!actualUa || !fingerprint?.navigator || fingerprint.navigator.userAgent === actualUa) return;
+    fingerprint.navigator.userAgent = actualUa;
+    if (Array.isArray(fingerprint.headers)) {
+      for (const h of fingerprint.headers) {
+        if (h?.name?.toLowerCase() === "user-agent") h.value = actualUa;
+      }
+    } else if (fingerprint.headers && typeof fingerprint.headers === "object") {
+      fingerprint.headers["user-agent"] = actualUa;
+    }
+    fs.writeFileSync(fingerprintPath, JSON.stringify(fingerprint, null, 2), "utf-8");
+  } catch (e) {}
+}
+
 const args = process.argv.slice(2);
 function getArg(name, defaultValue = null) {
   const idx = args.indexOf(name);
@@ -90,19 +135,16 @@ function getArg(name, defaultValue = null) {
 }
 const hasFlag = (name) => args.includes(name);
 
-// Default Proxy (Oxylabs Residential Proxy)
-const DEFAULT_PROXY = "customer-resi_c069a2c2-cc-in:15b+9UHzDZf+@pr.oxylabs.io:7777";
-const proxyArgRaw = getArg("--proxy", DEFAULT_PROXY);
-
-// Default Account
-const DEFAULT_ACCOUNT = "BurleighVandall804767@outlook.in|okfxpt31125|M.C531_BL2.0.U.MsaArtifacts.-CkDMo1ONcvzw5Iz1LhRaqjELCxPFQjBAp*nR3Gb1di7r7MfFDRE6yDb7BNRahRNvERMdtAfpEvv77dHMpLCagdXxr3WLxowogfHAHyKOMKx6JqbHN2bLsBfPn4GvjSO0*XXja86UX1Hx06eJIsMozO2fb23bFE2Hy4GeKhlUHiHVNQCVPzLPoeBBtNygzw3CoRqz3PMc2k8rPzBv*ohD!EK796WkXa0MxMxs6Dgk4e63vWGh*o8QqMN1A7rLTVJlWzTK1IElHTDHNGpwzP4I13cRc5D5o1WYMaFVhXq2B*A*0yipa2mCkLyXQBy7eow7CvBpWapuwZefQLDHigPaVMeUl8JEfSDR!WMd23Zc5bQ6o4rWezPWxgWkKoK7XM0eUIVqlS4KGDU*O1YcjzBbobBiq54WXVvpCF9ygwfnJP6u|9e5f94bc-e8a4-4e73-b8be-63364c29d753";
+const noProxyFlag = hasFlag("--no-proxy") || hasFlag("--direct");
+const DEFAULT_PROXY = process.env.OXYLABS_PROXY || "";
+const DEFAULT_ACCOUNT = process.env.FACEBOOK_ACCOUNT || "";
 
 const explicitEmail = getArg("--email");
 const explicitAccount = getArg("--account");
 
-let email = explicitEmail || (explicitAccount ? null : "BurleighVandall804767@outlook.in");
-let refreshToken = null;
-let clientId = null;
+let email = explicitEmail || null;
+let refreshToken = getArg("--refresh-token") || null;
+let clientId = getArg("--client-id") || null;
 
 const accountArg = explicitAccount || (!explicitEmail ? DEFAULT_ACCOUNT : null);
 if (accountArg && accountArg.includes("|")) {
@@ -133,25 +175,31 @@ const RISK_LOG_FILE = path.resolve("output", "facebook_risk_log.json");
 // ----------------------------------------------------
 // Proxy Utilities & Sticky Session Enforcement
 // ----------------------------------------------------
+function splitProxyParts(proxyStr) {
+  const clean = String(proxyStr).trim().replace(/^https?:\/\//i, "");
+  const at = clean.lastIndexOf("@");
+  if (at < 0) return { hasAuth: false, hostPort: clean, user: "", pass: "" };
+  const auth = clean.slice(0, at);
+  const hostPort = clean.slice(at + 1);
+  const colon = auth.indexOf(":");
+  const user = colon >= 0 ? auth.slice(0, colon) : auth;
+  const pass = colon >= 0 ? auth.slice(colon + 1) : "";
+  return { hasAuth: true, hostPort, user, pass };
+}
+
 function ensureStickyProxy(proxyStr, seed = null) {
   if (!proxyStr) return proxyStr;
-  let clean = String(proxyStr).trim().replace(/^https?:\/\//i, "");
-  if (!clean.includes("@")) return `http://${clean}`;
-  const [auth, hostPort] = clean.split("@");
-  let [username, password] = auth.split(":");
-  if (!username) return `http://${clean}`;
+  const { hasAuth, hostPort, user, pass } = splitProxyParts(proxyStr);
+  if (!hasAuth || !user) return `http://${hostPort}`;
 
-  // If using Oxylabs residential/mobile proxies, guarantee a 30-minute
-  // sticky session. Uses sessid-<id>-sesstime-30 with fresh session entropy
-  // so each execution connects to a live, active peer and avoids expired/dead peers from prior runs.
-  if (hostPort.includes("oxylabs.io") || username.startsWith("customer-")) {
-    if (!username.includes("sessid") && !username.includes("session")) {
-      const seedHash = seed ? crypto.createHash("md5").update(String(seed)).digest("hex").slice(0, 4) : "";
-      const sessId = `${seedHash}${crypto.randomBytes(3).toString("hex")}`;
-      username = `${username}-sessid-${sessId}-sesstime-30`;
-    }
+  let u = user;
+  if (hostPort.includes("oxylabs.io") || u.startsWith("customer-")) {
+    u = u.replace(/-sessid-[a-zA-Z0-9_-]+/g, "").replace(/-sesstime-\d+/g, "");
+    const seedHash = seed ? crypto.createHash("md5").update(String(seed)).digest("hex").slice(0, 4) : "";
+    const sessId = `${seedHash}${crypto.randomBytes(3).toString("hex")}`;
+    u = `${u}-sessid-${sessId}-sesstime-30`;
   }
-  return `http://${username}:${password}@${hostPort}`;
+  return `http://${u}:${pass}@${hostPort}`;
 }
 
 function parseProxyIdentity(proxyStr) {
@@ -176,6 +224,7 @@ function parseProxyIdentity(proxyStr) {
 
   const countryMatch = username.match(/-cc-([a-z]{2})(?:[-_]|$)/i);
   const stateMatch = username.match(/-st-([a-z_]+)(?:[-_]|$)/i);
+  const cityMatch = username.match(/-city-([a-z_]+)(?:[-_]|$)/i);
   return {
     host: host || null,
     username_hash: username ? crypto.createHash("sha256").update(String(username)).digest("hex").slice(0, 16) : null,
@@ -184,7 +233,8 @@ function parseProxyIdentity(proxyStr) {
     session_minutes: sessionTimeMatch ? Number(sessionTimeMatch[1]) : null,
     sticky_port: stickyPort,
     country: countryMatch ? countryMatch[1].toUpperCase() : null,
-    state: stateMatch ? stateMatch[1] : null,
+    state: stateMatch ? stateMatch[1].replace(/^us_/, "") : null,
+    city: cityMatch ? cityMatch[1].replace(/_/g, " ") : null,
     has_sticky_session: Boolean(session || stickyPort),
     strict_sticky: sessionType === "sessid_oneip" || Boolean(stickyPort),
   };
@@ -192,17 +242,15 @@ function parseProxyIdentity(proxyStr) {
 
 function parseProxy(proxyStr) {
   if (!proxyStr) return null;
-  let clean = proxyStr.replace(/^https?:\/\//i, "");
-  if (clean.includes("@")) {
-    const [auth, hostPort] = clean.split("@");
-    const [username, password] = auth.split(":");
+  const { hasAuth, hostPort, user, pass } = splitProxyParts(proxyStr);
+  if (hasAuth) {
     return {
       server: `http://${hostPort}`,
-      username: decodeURIComponent(username),
-      password: decodeURIComponent(password),
+      username: decodeURIComponent(user),
+      password: decodeURIComponent(pass),
     };
   }
-  return { server: `http://${clean}` };
+  return { server: `http://${hostPort}` };
 }
 
 function deriveTimezoneFromProxy(proxyStr) {
@@ -223,18 +271,20 @@ function validateProxyConnectivity(proxyStr, timeoutMs = 7000) {
   const clean = String(proxyStr).trim();
   const nullDevice = process.platform === "win32" ? "NUL" : "/dev/null";
   try {
-    const cmd = `curl.exe -sS -o ${nullDevice} -w "%{http_code}" --connect-timeout 5 -x "${clean}" "https://icanhazip.com"`;
-    const code = execSync(cmd, { encoding: "utf-8", timeout: timeoutMs, stdio: ["pipe", "pipe", "pipe"] }).trim();
-    if (code === "200") {
-      return { ok: true, statusCode: 200 };
-    }
+    const code = execFileSync(
+      "curl.exe",
+      ["-sS", "-o", nullDevice, "-w", "%{http_code}", "--connect-timeout", "5", "-x", clean, "https://icanhazip.com"],
+      { encoding: "utf-8", timeout: timeoutMs, stdio: ["pipe", "pipe", "pipe"] }
+    ).trim();
+    if (code === "200") return { ok: true, statusCode: 200 };
+    if (code === "407") return { ok: false, statusCode: 407, error: "HTTP 407 Proxy Authentication Required" };
     return { ok: false, statusCode: Number(code) || 0, error: `Proxy returned HTTP status ${code}` };
   } catch (err) {
     const stdout = (err.stdout ? String(err.stdout) : "").trim();
     const stderr = (err.stderr ? String(err.stderr) : "").trim();
     const combined = `${stdout} ${stderr} ${err.message || ""}`;
     if (/407/i.test(combined) || stdout === "407") {
-      return { ok: false, statusCode: 407, error: `HTTP 407 Proxy Authentication Required / Access Denied (${stderr || stdout || "407"})` };
+      return { ok: false, statusCode: 407, error: `HTTP 407 Proxy Authentication Required (${stderr || stdout || "407"})` };
     }
     return { ok: false, error: stderr || err.message };
   }
@@ -330,26 +380,47 @@ function saveRiskLog() {
 }
 
 async function captureExitIp(page, step = "unspecified") {
-  const entry = { step, at: new Date().toISOString(), ip: null, asn: null, org: null, city: null, region: null, country: null, timezone: null };
+  const proxyIdent = (RISK && RISK.proxy) ? RISK.proxy : {};
+  const entry = {
+    step,
+    at: new Date().toISOString(),
+    ip: null,
+    asn: null,
+    org: null,
+    city: proxyIdent.city || null,
+    region: proxyIdent.state || null,
+    country: proxyIdent.country || null,
+    timezone: null,
+  };
   try {
     const loc = await page.evaluate(async () => {
-      const controller = new AbortController();
-      const tid = setTimeout(() => controller.abort(), 4000);
-      try {
-        const res = await fetch("https://ipapi.co/json/", { signal: controller.signal });
-        if (res.ok) return await res.json();
-      } catch (e) { }
-      finally { clearTimeout(tid); }
+      const endpoints = [
+        "https://ipapi.co/json/",
+        "https://ipwho.is/",
+        "http://ip-api.com/json/?fields=status,message,country,countryCode,region,regionName,city,timezone,as,org,query",
+      ];
+      for (const url of endpoints) {
+        try {
+          const controller = new AbortController();
+          const tid = setTimeout(() => controller.abort(), 4000);
+          const res = await fetch(url, { signal: controller.signal });
+          clearTimeout(tid);
+          if (res.ok) {
+            const data = await res.json();
+            if (data && (data.ip || data.query)) return data;
+          }
+        } catch (e) { }
+      }
       return null;
     });
     if (loc && (loc.ip || loc.query)) {
       entry.ip = loc.ip || loc.query;
-      entry.city = loc.city || "Unknown";
-      entry.region = loc.region || loc.region_code || "Unknown";
-      entry.country = loc.country_name || loc.country || "United States";
+      entry.city = loc.city || proxyIdent.city || "Unknown";
+      entry.region = loc.region || loc.region_name || loc.regionName || loc.region_code || proxyIdent.state || "Unknown";
+      entry.country = loc.country_name || loc.country || proxyIdent.country || "United States";
       entry.timezone = loc.timezone || "America/Chicago";
-      entry.asn = loc.asn || null;
-      entry.org = loc.org || null;
+      entry.asn = loc.asn || loc.as || null;
+      entry.org = loc.org || loc.connection?.org || null;
     }
   } catch (e) { }
 
@@ -625,11 +696,12 @@ function printStealthAuditDashboard(audit) {
 // ----------------------------------------------------
 // Human Typing & Kinematic Cadence
 // ----------------------------------------------------
-function gaussianDelay(mean = 38, stdDev = 12) {
+function gaussianDelay(mean = 260, stdDev = 30) {
   const u = 1 - Math.random();
   const v = Math.random();
   const z = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
-  return Math.max(12, Math.min(110, Math.round(mean + z * stdDev)));
+  // Average 40-52 WPM (230ms - 300ms per char)
+  return Math.max(210, Math.min(310, Math.round(mean + z * stdDev)));
 }
 
 async function humanType(page, locator, text, options = {}) {
@@ -638,34 +710,37 @@ async function humanType(page, locator, text, options = {}) {
     if (typeof element.click === "function") return element.click().catch(() => {});
   });
   await new Promise((r) => setTimeout(r, 80 + Math.random() * 80));
-  if (typeof element.fill === "function") {
-    await element.fill("").catch(() => {});
+  const currentVal = await element.inputValue().catch(() => "");
+  if (currentVal && currentVal.length > 0) {
+    if (typeof page.keyboard?.press === "function") {
+      await page.keyboard.press("Control+A").catch(() => {});
+      await new Promise((r) => setTimeout(r, 35 + Math.random() * 25));
+      await page.keyboard.press("Backspace").catch(() => {});
+      await new Promise((r) => setTimeout(r, 40 + Math.random() * 30));
+    }
   }
   await new Promise((r) => setTimeout(r, 40 + Math.random() * 40));
 
+  const pressChar = async (ch) => {
+    const hold = 35 + Math.floor(Math.random() * 40);
+    if (typeof element.pressSequentially === "function") {
+      await element.pressSequentially(ch, { delay: hold }).catch(() => {});
+    } else {
+      await page.keyboard.type(ch, { delay: hold }).catch(() => {});
+    }
+  };
+
   for (let i = 0; i < text.length; i++) {
     const char = text[i];
-    // Natural human typo emulation: 2% chance to mistype and backspace
     if (options.typos !== false && Math.random() < 0.02 && char !== " " && char !== "@") {
       const typoChar = String.fromCharCode(char.charCodeAt(0) + (Math.random() > 0.5 ? 1 : -1));
-      if (typeof element.pressSequentially === "function") {
-        await element.pressSequentially(typoChar, { delay: gaussianDelay(38, 12) }).catch(() => {});
-      } else if (typeof element.type === "function") {
-        await element.type(typoChar, { delay: gaussianDelay(38, 12) }).catch(() => {});
-      } else {
-        await page.keyboard.type(typoChar, { delay: gaussianDelay(38, 12) }).catch(() => {});
-      }
-      await new Promise((r) => setTimeout(r, 60 + Math.random() * 80));
+      await pressChar(typoChar);
+      await new Promise((r) => setTimeout(r, gaussianDelay(260, 30)));
       await page.keyboard.press("Backspace").catch(() => {});
       await new Promise((r) => setTimeout(r, 50 + Math.random() * 60));
     }
-    if (typeof element.pressSequentially === "function") {
-      await element.pressSequentially(char, { delay: gaussianDelay(38, 12) }).catch(() => {});
-    } else if (typeof element.type === "function") {
-      await element.type(char, { delay: gaussianDelay(38, 12) }).catch(() => {});
-    } else {
-      await page.keyboard.type(char, { delay: gaussianDelay(38, 12) }).catch(() => {});
-    }
+    await pressChar(char);
+    await new Promise((r) => setTimeout(r, gaussianDelay(260, 30)));
   }
   await new Promise((r) => setTimeout(r, 120 + Math.random() * 120));
 }
@@ -805,7 +880,7 @@ async function warmUpFeed(page, durationSeconds = 30) {
     const readPause = 1800 + Math.floor(Math.random() * 2500);
     await page.waitForTimeout(readPause);
 
-    await humanWander(page, 1).catch(() => { });
+    await humanWander(page).catch(() => {});
   }
   console.log("[Facebook Warmup] Completed natural human feed browsing warmup.");
 }
@@ -969,7 +1044,11 @@ async function pollOutlookForFacebookOtp(cId, rToken, startTimeMs, maxWaitSecond
 async function pollTempMailForOtp(address, maxWaitSeconds = 120) {
   console.log(`[TempMail OTP] Polling Temp-Mail API for ${address}...`);
   const startTime = Date.now();
-  const token = "90494412cbmsh3413cfd395721a1p1f4787jsn348cfd395721";
+  const token = process.env.TEMP_MAIL_API_KEY || "";
+  if (!token) {
+    console.warn("[TempMail OTP] TEMP_MAIL_API_KEY is not set in environment.");
+    return null;
+  }
 
   while ((Date.now() - startTime) < maxWaitSeconds * 1000) {
     try {
@@ -1374,36 +1453,14 @@ async function selectFacebookGender(page, targetGender) {
     await page.waitForTimeout(400);
 
     // 2. Click the desired option (Female or Male) inside the opened popover
-    const clickedInDom = await page.evaluate((isFemaleTarget) => {
-      const reg = isFemaleTarget ? /^(?:female|महिला|સ્ત્રી)$/i : /^(?:male|पुरुष|પુરુષ)$/i;
-      const options = Array.from(document.querySelectorAll("[role='option'], [role='menuitem'], [role='menuitemradio'], [role='listbox'] div, div[role='dialog'] [role='option'], li, div[tabindex='-1']"));
-      for (const opt of options) {
-        const txt = (opt.innerText || opt.textContent || "").trim();
-        // NEVER match Custom or Pronoun
-        if (/custom|pronoun|कस्टम|કસ્ટમ|other/i.test(txt)) continue;
-        if (reg.test(txt)) {
-          const rect = opt.getBoundingClientRect();
-          if (rect.width > 0 && rect.height > 0) {
-            opt.click();
-            return { clicked: true, text: txt };
-          }
-        }
-      }
-      return { clicked: false };
-    }, isFemale);
-
-    if (clickedInDom.clicked) {
-      console.log(`[Facebook] Successfully clicked gender option in DOM: '${clickedInDom.text}'`);
-    } else {
-      const optLoc = page.locator("[role='option'], [role='menuitem'], [role='menuitemradio'], [role='listbox'] *")
-        .filter({ hasText: targetOptionRegex })
-        .first();
-      if ((await optLoc.count()) > 0 && (await optLoc.isVisible().catch(() => false))) {
-        const t = (await optLoc.innerText().catch(() => "")).trim();
-        if (!/custom|pronoun/i.test(t)) {
-          console.log(`[Facebook] Clicking gender option via locator: '${t}'`);
-          await optLoc.click({ force: true });
-        }
+    const optLoc = page.locator("[role='option'], [role='menuitem'], [role='menuitemradio'], [role='listbox'] div, [role='listbox'] span, label")
+      .filter({ hasText: targetOptionRegex })
+      .first();
+    if ((await optLoc.count()) > 0 && (await optLoc.isVisible().catch(() => false))) {
+      const t = (await optLoc.innerText().catch(() => "")).trim();
+      if (!/custom|pronoun/i.test(t)) {
+        console.log(`[Facebook] Clicking gender option via locator: '${t}'`);
+        await humanClick(page, optLoc).catch(() => optLoc.click({ force: true }));
       }
     }
 
@@ -1527,39 +1584,17 @@ async function fillFacebookEmail(page, email) {
 
     // Multi-layer fill & human typing
     await humanClick(page, emLocator).catch(() => emLocator.click({ force: true }));
-    await emLocator.fill("").catch(() => {});
-    await emLocator.fill(email).catch(() => {});
+    await page.keyboard.press("Control+A").catch(() => {});
+    await page.keyboard.press("Backspace").catch(() => {});
     await humanType(page, emLocator, email, { typos: false });
-
-    // Enforce React synthetic event dispatch
-    await page.evaluate((targetEmail) => {
-      const pw = document.querySelector("input[type='password']:not([type='hidden'])");
-      const form = (pw && (pw.closest("form") || pw.closest("div[role='dialog']"))) || document.body;
-      const inputs = Array.from(form.querySelectorAll("input:not([type='password']):not([type='hidden']):not([type='radio']):not([type='checkbox'])"));
-      const visible = inputs.filter(i => {
-        const r = i.getBoundingClientRect();
-        const t = `${i.name} ${i.getAttribute("aria-label")||""} ${i.placeholder||""}`.toLowerCase();
-        return r.width > 0 && r.height > 0 && !t.includes("gender") && !t.includes("pronoun") && !t.includes("firstname") && !t.includes("lastname");
-      });
-      const targetInput = visible[visible.length - 1]; // input immediately before password
-      if (targetInput) {
-        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
-        if (nativeSetter) {
-          nativeSetter.call(targetInput, targetEmail);
-        } else {
-          targetInput.value = targetEmail;
-        }
-        targetInput.dispatchEvent(new Event("input", { bubbles: true }));
-        targetInput.dispatchEvent(new Event("change", { bubbles: true }));
-        targetInput.dispatchEvent(new Event("blur", { bubbles: true }));
-      }
-    }, email).catch(() => {});
 
     // Strict Verification: Ensure the value was actually received by the input
     let val = await emLocator.inputValue().catch(() => "");
     if (!val || val !== email) {
       console.warn(`[Facebook] Email field verification mismatch (got '${val}', expected '${email}'). Re-filling directly...`);
-      await emLocator.fill(email).catch(() => {});
+      await page.keyboard.press("Control+A").catch(() => {});
+      await page.keyboard.press("Backspace").catch(() => {});
+      await humanType(page, emLocator, email, { typos: false });
       val = await emLocator.inputValue().catch(() => "");
     }
     console.log(`[Facebook] Email field successfully populated and verified: '${val}'`);
@@ -1569,7 +1604,9 @@ async function fillFacebookEmail(page, email) {
     await fallback.waitFor({ state: "visible", timeout: 8000 }).catch(() => { });
     if (await fallback.isVisible().catch(() => false)) {
       await fallback.scrollIntoViewIfNeeded().catch(() => { });
-      await fallback.fill(email).catch(() => {});
+      await humanClick(page, fallback).catch(() => fallback.click({ force: true }));
+      await page.keyboard.press("Control+A").catch(() => {});
+      await page.keyboard.press("Backspace").catch(() => {});
       await humanType(page, fallback, email, { typos: false });
     }
   }
@@ -1580,7 +1617,6 @@ async function fillFacebookEmail(page, email) {
   if ((await reEmInput.count()) > 0 && (await reEmInput.isVisible().catch(() => false))) {
     console.log("[Facebook] Re-entering email confirmation...");
     await reEmInput.scrollIntoViewIfNeeded().catch(() => { });
-    await reEmInput.fill(email).catch(() => {});
     await humanType(page, reEmInput, email, { typos: false });
   }
 }
@@ -1713,20 +1749,12 @@ async function resendFacebookOtp(page) {
       }
     }
 
-    const found = await page.evaluate(() => {
-      const linksAndButtons = Array.from(document.querySelectorAll("a, button, [role='button'], span"));
-      for (const el of linksAndButtons) {
-        const text = (el.innerText || "").trim().toLowerCase();
-        if (text.includes("send email again") || text.includes("send code again") || text.includes("resend") || text.includes("दोबारा भेजें")) {
-          el.click();
-          return true;
-        }
-      }
-      return false;
-    });
-
-    if (found) {
-      console.log("[Facebook] Triggered resend via DOM search fallback.");
+    const resendBtn = page.locator("a, button, [role='button'], span").filter({
+      hasText: /send email again|send code again|resend|दोबारा भेजें/i
+    }).first();
+    if ((await resendBtn.count()) > 0 && (await resendBtn.isVisible().catch(() => false))) {
+      await humanClick(page, resendBtn).catch(() => resendBtn.click({ force: true }));
+      console.log("[Facebook] Triggered resend via locator.");
       await page.waitForTimeout(3000);
       return true;
     }
@@ -1884,7 +1912,6 @@ async function handleOtpChallenge(page, targetEmail, cId, rToken, sessionStartTi
     console.log("[Facebook] OTP submitted. Waiting 10s for confirmation...");
     await page.waitForTimeout(10000);
     riskMark("otp_submitted");
-    console.log(`[Facebook] Current URL: ${page.url()} | Title: '${await page.title()}'`);
     const postOtpUrl = page.url() || "";
     console.log(`[Facebook] Current URL: ${postOtpUrl} | Title: '${await page.title()}'`);
 
@@ -2086,8 +2113,26 @@ async function completePageOnboarding(page, pageName, proxyLocation = {}) {
   console.log(`[Facebook Onboarding] Running wizard setup for: "${pageName}"`);
   console.log("=".repeat(60));
 
-  const profilePhotoPath = path.resolve("tests", "test_artifacts", "test_thumb_vertical.jpg");
-  const coverPhotoPath = path.resolve("tests", "test_artifacts", "test_thumb_horizontal.jpg");
+  const rawProfilePhoto = path.resolve("tests", "test_artifacts", "test_thumb_vertical.jpg");
+  const rawCoverPhoto = path.resolve("tests", "test_artifacts", "test_thumb_horizontal.jpg");
+  const uniqueProfilePhoto = path.resolve("tests", "test_artifacts", "fb_profile_unique.jpg");
+  const uniqueCoverPhoto = path.resolve("tests", "test_artifacts", "fb_cover_unique.jpg");
+
+  let profilePhotoPath = rawProfilePhoto;
+  let coverPhotoPath = rawCoverPhoto;
+
+  try {
+    if (fs.existsSync(rawProfilePhoto)) {
+      execFileSync("python", ["tools/generate_unique_dp.py", rawProfilePhoto, uniqueProfilePhoto], { stdio: "pipe" });
+      if (fs.existsSync(uniqueProfilePhoto)) profilePhotoPath = uniqueProfilePhoto;
+    }
+    if (fs.existsSync(rawCoverPhoto)) {
+      execFileSync("python", ["tools/generate_unique_dp.py", rawCoverPhoto, uniqueCoverPhoto], { stdio: "pipe" });
+      if (fs.existsSync(uniqueCoverPhoto)) coverPhotoPath = uniqueCoverPhoto;
+    }
+  } catch (imgErr) {
+    console.warn(`[Facebook Onboarding] Note generating unique images: ${imgErr.message}`);
+  }
   const cleanHandle = pageName.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 30);
 
   for (let step = 1; step <= 8; step++) {
@@ -2302,28 +2347,21 @@ async function run() {
   if (newEmailFlag) {
     email = await createTempMailbox();
   }
+  if (!email) {
+    console.error("[Facebook Error] Missing email. Pass --email / --account / --new-email or set FACEBOOK_ACCOUNT in .env.");
+    process.exit(1);
+  }
 
   const explicitProxy = getArg("--proxy");
-  let rawProxy = explicitProxy || DEFAULT_PROXY;
-  let effectiveProxy = ensureStickyProxy(rawProxy, email);
+  const rawProxy = noProxyFlag ? null : (explicitProxy || DEFAULT_PROXY);
+  const effectiveProxy = rawProxy ? ensureStickyProxy(rawProxy, email) : null;
 
-  console.log(`[Proxy] Running pre-flight connectivity verification...`);
-  const check = validateProxyConnectivity(effectiveProxy);
-  if (!check.ok) {
-    console.error("=".repeat(70));
-    if (check.statusCode === 407 || /407/i.test(check.error || "")) {
-      console.error(`[Proxy 407 Error] Proxy returned HTTP 407 (Proxy Authentication Required / Access Denied).`);
-    } else {
-      console.error(`[Proxy Error] Configured proxy pre-flight verification failed!`);
+  if (effectiveProxy) {
+    const check = validateProxyConnectivity(effectiveProxy);
+    if (!check.ok) {
+      console.error(`[Proxy Error] Pre-flight check failed: ${check.error}`);
+      process.exit(1);
     }
-    console.error(`[Proxy Error] Target Proxy: ${effectiveProxy}`);
-    console.error(`[Proxy Error] Reason:       ${check.error}`);
-    console.error(`[Proxy Error] User Rule: Strictly do NOT fall back to default proxy.`);
-    console.error(`[Proxy Error] Halting script execution immediately.`);
-    console.error("=".repeat(70));
-    process.exit(1);
-  } else {
-    console.log(`[Proxy Success] Proxy verified and operational (HTTP ${check.statusCode || 200}).`);
   }
 
   const parsedProxyIdentity = parseProxyIdentity(effectiveProxy);
@@ -2444,22 +2482,7 @@ async function run() {
     console.log(`[Camoufox] Generated and froze full fingerprint (${fingerprint.screen.width}x${fingerprint.screen.height})`);
   }
 
-  // Strict User-Agent Parity: Align DOM navigator.userAgent and headers with native Camoufox C++ 158.0 engine
-  if (fingerprint && fingerprint.navigator) {
-    if (fingerprint.navigator.userAgent !== CAMOUFOX_UA || fingerprint.navigator.appVersion !== "5.0 (Windows)") {
-      fingerprint.navigator.userAgent = CAMOUFOX_UA;
-      fingerprint.navigator.appVersion = "5.0 (Windows)";
-      if (Array.isArray(fingerprint.headers)) {
-        for (const h of fingerprint.headers) {
-          if (h && h.name && h.name.toLowerCase() === "user-agent") {
-            h.value = CAMOUFOX_UA;
-          }
-        }
-      }
-      try { fs.writeFileSync(fingerprintPath, JSON.stringify(fingerprint, null, 2)); } catch (e) { }
-      console.log(`[Camoufox] Aligned fingerprint User-Agent to native Camoufox C++ stack (${CAMOUFOX_UA})`);
-    }
-  }
+
 
   // Sync VideoCard with explicit WebGL config
   if (persona?.webgl_config) {
@@ -2505,7 +2528,7 @@ async function run() {
     user_data_dir: profileDir,
     headless: headless,
     os: "windows",
-    humanize: 0.85,
+    humanize: false,
     block_webrtc: true,
     exclude_addons: ["UBO"],     // Exclude bundled ad-blocker to prevent CSP data: injection violations & CDN script drops
     screen: { maxWidth: scr.width, maxHeight: scr.height },
@@ -2535,11 +2558,17 @@ async function run() {
       "locale:language": "en",
       "locale:all": "en-US, en",
     },
-    proxy: parsedProxy,
+    geoip: Boolean(parsedProxy),
   };
+  if (parsedProxy) {
+    browserConfig.proxy = parsedProxy;
+  }
 
   const browser = await Camoufox(browserConfig);
-  const context = (browser.contexts && browser.contexts().length > 0) ? browser.contexts()[0] : null;
+  activeBrowser = browser;
+  const context = typeof browser.addCookies === "function"
+    ? browser
+    : (browser.contexts?.()[0] || browser);
   if (context) {
     await context.addCookies([
       {
@@ -2553,33 +2582,7 @@ async function run() {
   const page = (browser.pages && browser.pages().length > 0) ? browser.pages()[0] : await browser.newPage();
   await page.bringToFront().catch(() => { });
 
-  // Native Passkey (WebAuthn) Spoofing: ensures Windows Hello capability is declared and translates
-  // unexpected SecurityError exceptions into standard W3C NotAllowedError so Meta's FBLOGGER never catches "The operation is insecure"
-  await page.addInitScript(() => {
-    try {
-      if (window.PublicKeyCredential) {
-        window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable = async () => true;
-        if (window.PublicKeyCredential.isConditionalMediationAvailable) {
-          window.PublicKeyCredential.isConditionalMediationAvailable = async () => true;
-        }
-      }
-      if (window.navigator && window.navigator.credentials) {
-        const origGet = window.navigator.credentials.get.bind(window.navigator.credentials);
-        window.navigator.credentials.get = async function (options) {
-          if (options && options.mediation === "conditional") {
-            return new Promise((resolve, reject) => {
-              if (options.signal) {
-                options.signal.addEventListener("abort", () => {
-                  reject(new DOMException("The operation was aborted.", "AbortError"));
-                });
-              }
-            });
-          }
-          return origGet(options);
-        };
-      }
-    } catch (e) { }
-  });
+  await alignFrozenUserAgent(page, fingerprint, fingerprintPath);
 
   // Continuous 10-second Screenshot Ticker
   let tickerActive = true;
@@ -2599,6 +2602,18 @@ async function run() {
     console.log("[Camoufox] Verifying Proxy IP, ASN & location via ipapi.co...");
     const proxyLocation = await captureExitIp(page, "pre_signup");
     console.log(`[Camoufox] Exit IP: ${proxyLocation.ip} | ASN: ${proxyLocation.asn || "unknown"} | Location: ${proxyLocation.city}, ${proxyLocation.region}, ${proxyLocation.country}`);
+
+    try {
+      const existingInfo = fs.existsSync(accountInfoPath) ? JSON.parse(fs.readFileSync(accountInfoPath, "utf-8")) : {};
+      existingInfo.proxy_ip = proxyLocation.ip;
+      existingInfo.proxy_location = {
+        city: proxyLocation.city,
+        region: proxyLocation.region,
+        country: proxyLocation.country,
+        timezone: proxyLocation.timezone,
+      };
+      fs.writeFileSync(accountInfoPath, JSON.stringify(existingInfo, null, 2), "utf-8");
+    } catch (e) { }
 
     console.log("[Camoufox] Auditing browser/fingerprint coherence (webdriver, timezone, screen, WebGL, WebRTC)...");
     const coherenceAudit = await auditBrowserCoherence(page, {
@@ -2884,14 +2899,12 @@ async function run() {
         await page.waitForTimeout(350);
         await humanClick(page, submitBtn).catch(() => submitBtn.click());
       } else {
-        await page.evaluate(() => {
-          const buttons = Array.from(document.querySelectorAll("[role='button'], button"));
-          const btn = buttons.find((b) => {
-            const t = (b.innerText || "").trim().toLowerCase();
-            return t === "submit" || t === "sign up" || t.includes("सबमिट") || t.includes("साइन अप");
-          });
-          if (btn) btn.click();
-        });
+        const fallbackBtn = page.locator("button, [role='button']").filter({
+          hasText: /^(?:submit|sign up|websubmit|सबमिट|साइन अप)$/i
+        }).first();
+        if ((await fallbackBtn.count()) > 0 && (await fallbackBtn.isVisible().catch(() => false))) {
+          await humanClick(page, fallbackBtn).catch(() => fallbackBtn.click({ force: true }));
+        }
       }
 
       await page.waitForTimeout(2000);

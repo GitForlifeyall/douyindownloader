@@ -14,7 +14,7 @@ import { execSync } from "node:child_process";
 const CAMOUFOX_PATH = "file:///C:/Users/rudra/AppData/Roaming/npm/node_modules/camoufox-cli/node_modules/camoufox-js/dist/index.js";
 const { Camoufox } = await import(CAMOUFOX_PATH);
 
-const DEFAULT_PROXY = "customer-resi_4edb25d7:fo4ENfj4pMx+@pr.oxylabs.io:7777";
+const DEFAULT_PROXY = process.env.OXYLABS_PROXY || "";
 const args = process.argv.slice(2);
 const proxyArg = args.find((a, i) => args[i - 1] === "--proxy") || DEFAULT_PROXY;
 const headless = args.includes("--headless");

@@ -1,21 +1,11 @@
 /**
  * kinematic_mouse.mjs
- * 
+ *
  * High-fidelity human kinematic pointer simulation for Playwright / Camoufox.
- * Combines:
- *   1. Neural LSTM Trajectory Generation via ONNX model (jason-snell/humanized-cursor-trajectory-gen)
- *      trained on real human mouse recordings.
- *   2. Catmull-Rom spline densification & smoothing.
- *   3. Algorithmic Cubic Bézier & Fitts's Law fallback engine.
- *   4. Biological micro-tremors & physiological sub-pixel jitter.
- *   5. Non-central 2D Gaussian click targeting within element bounding boxes.
- *   6. Realistic physical mouse switch depression hold times (55ms - 130ms) & pre-click dwells.
- *   7. Inertial wheel scrolling with multi-frame velocity decay.
  */
 
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -24,6 +14,10 @@ const MODEL_PATH = path.join(__dirname, "models", "cursor_trajectory.onnx");
 let ort = null;
 let onnxSession = null;
 let onnxLoadAttempted = false;
+
+function safeOpts(options) {
+  return options && typeof options === "object" ? options : {};
+}
 
 async function getOnnxSession() {
   if (onnxSession) return onnxSession;
@@ -35,7 +29,8 @@ async function getOnnxSession() {
       console.warn(`[KinematicMouse] ONNX model not found at ${MODEL_PATH}. Using algorithmic Bézier engine.`);
       return null;
     }
-    ort = (await import("onnxruntime-node")).default;
+    const ortMod = await import("onnxruntime-node");
+    ort = ortMod.default || ortMod;
     onnxSession = await ort.InferenceSession.create(MODEL_PATH);
     console.log("[KinematicMouse] Neural Cursor Trajectory Generator (ONNX) initialized.");
     return onnxSession;
@@ -52,9 +47,9 @@ function randomFloat(min, max) {
 }
 
 function gaussianRandom(mean = 0, stdev = 1) {
-  let u = 1 - Math.random();
-  let v = Math.random();
-  let z = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+  const u = 1 - Math.random();
+  const v = Math.random();
+  const z = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
   return z * stdev + mean;
 }
 
@@ -66,19 +61,19 @@ function catmullRom(p0, p1, p2, p3, t) {
   const t2 = t * t;
   const t3 = t2 * t;
 
-  const x = 0.5 * (
-    (2 * p1.x) +
-    (-p0.x + p2.x) * t +
-    (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 +
-    (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3
-  );
+  const x =
+    0.5 *
+    (2 * p1.x +
+      (-p0.x + p2.x) * t +
+      (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 +
+      (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3);
 
-  const y = 0.5 * (
-    (2 * p1.y) +
-    (-p0.y + p2.y) * t +
-    (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 +
-    (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3
-  );
+  const y =
+    0.5 *
+    (2 * p1.y +
+      (-p0.y + p2.y) * t +
+      (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 +
+      (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3);
 
   return { x, y };
 }
@@ -105,7 +100,6 @@ function interpolateCatmullRom(controlPoints, pointsPerSegment = 2) {
   return result;
 }
 
-// Asymmetric Fitts's Law pacing curve: fast acceleration, prolonged deceleration landing
 function fittsEasing(t) {
   if (t <= 0) return 0;
   if (t >= 1) return 1;
@@ -129,16 +123,14 @@ export function setMousePosition(page, x, y) {
   pagePositions.set(page, { x, y });
 }
 
-/**
- * Generate human trajectory using trained LSTM ONNX model + Catmull-Rom spline.
- */
 async function generateNeuralTrajectory(p0, p3, options = {}) {
   const sess = await getOnnxSession();
   if (!sess) return null;
 
   try {
-    const randomness = options.randomness ?? 0.9;
-    const density = options.density ?? 1;
+    const opts = safeOpts(options);
+    const randomness = opts.randomness ?? 0.9;
+    const density = opts.density ?? 1;
 
     let largest = Math.max(p0.x, p0.y, p3.x, p3.y);
     largest += largest / 2.0;
@@ -157,8 +149,9 @@ async function generateNeuralTrajectory(p0, p3, options = {}) {
 
     const controlPoints = [{ x: p0.x, y: p0.y }];
     const maxDistance = 6;
+    const pointCount = Math.floor(rawOutput.length / 2);
 
-    for (let i = 0; i < rawOutput.length / 2; i++) {
+    for (let i = 0; i < pointCount; i++) {
       const px = rawOutput[i * 2] * largest;
       const py = rawOutput[i * 2 + 1] * largest;
 
@@ -176,9 +169,8 @@ async function generateNeuralTrajectory(p0, p3, options = {}) {
       const pt = smoothed[i];
       const prev = i > 0 ? smoothed[i - 1] : pt;
       const stepDist = Math.hypot(pt.x - prev.x, pt.y - prev.y);
-
-      // Natural brisk human pacing (2-6ms per point with micro-jitter)
-      const delay = Math.max(2, Math.min(8, Math.round(randomFloat(2, 5) + (stepDist < 2.5 ? 2 : 0))));
+      // Aligned with Windows OS 15.6ms timer resolution (~60fps input frames)
+      const delay = Math.max(14, Math.min(22, Math.round(randomFloat(15, 19) + (stepDist < 3 ? 2 : 0))));
 
       let mx = pt.x;
       let my = pt.y;
@@ -201,19 +193,17 @@ async function generateNeuralTrajectory(p0, p3, options = {}) {
   }
 }
 
-/**
- * Fallback algorithmic Bézier trajectory generator (agile human pacing).
- */
-function generateBezierTrajectory(p0, p3, options = {}) {
+function generateBezierTrajectory(p0, p3) {
   const dx = p3.x - p0.x;
   const dy = p3.y - p0.y;
   const dist = Math.hypot(dx, dy);
 
-  if (dist < 3) {
-    return [{ x: p3.x, y: p3.y, delay: Math.round(randomFloat(8, 16)) }];
+  if (dist < 4) {
+    return [{ x: p3.x, y: p3.y, delay: Math.round(randomFloat(16, 24)) }];
   }
 
-  const baseSteps = Math.max(8, Math.min(32, Math.round(dist / randomFloat(16, 26))));
+  // Realistic human pointer strokes: 5-12 waypoints at ~60Hz input frame rate
+  const baseSteps = Math.max(5, Math.min(12, Math.round(dist / randomFloat(35, 60))));
   const nx = -dy / dist;
   const ny = dx / dist;
   const side = Math.random() < 0.5 ? 1 : -1;
@@ -255,7 +245,8 @@ function generateBezierTrajectory(p0, p3, options = {}) {
     }
 
     const velocityFactor = 1 - Math.abs(t - 0.42);
-    const stepDelay = Math.round(randomFloat(2, 5) + (1 - velocityFactor) * 3);
+    // Align with Windows timer resolution (16ms frames)
+    const stepDelay = Math.round(randomFloat(15, 18) + (1 - velocityFactor) * 4);
 
     points.push({ x: Number(bx.toFixed(2)), y: Number(by.toFixed(2)), delay: stepDelay });
   }
@@ -265,21 +256,18 @@ function generateBezierTrajectory(p0, p3, options = {}) {
 
 export async function generateKinematicPath(p0, p3, options = {}) {
   const dist = Math.hypot(p3.x - p0.x, p3.y - p0.y);
-  // For medium to long distances, use neural ONNX trajectory
   if (dist >= 20) {
     const neuralPath = await generateNeuralTrajectory(p0, p3, options);
     if (neuralPath && neuralPath.length >= 2) {
       return neuralPath;
     }
   }
-  return generateBezierTrajectory(p0, p3, options);
+  return generateBezierTrajectory(p0, p3);
 }
 
-/**
- * Glide mouse cursor smoothly from current position to (targetX, targetY).
- */
 export async function humanGlide(page, targetX, targetY, options = {}) {
   try {
+    const opts = safeOpts(options);
     const currentPos = getMousePosition(page);
     const vp = page.viewportSize() || { width: 1280, height: 800 };
     const safeTarget = {
@@ -287,8 +275,8 @@ export async function humanGlide(page, targetX, targetY, options = {}) {
       y: clamp(Math.round(targetY), 2, vp.height - 2),
     };
 
-    const path = await generateKinematicPath(currentPos, safeTarget, options);
-    for (const pt of path) {
+    const trajectory = await generateKinematicPath(currentPos, safeTarget, opts);
+    for (const pt of trajectory) {
       await page.mouse.move(pt.x, pt.y);
       if (pt.delay > 0) {
         await new Promise((r) => setTimeout(r, pt.delay));
@@ -303,13 +291,11 @@ export async function humanGlide(page, targetX, targetY, options = {}) {
   }
 }
 
-/**
- * Click an element or locator with full human kinematic fidelity.
- */
 export async function humanClick(page, target, options = {}) {
+  const opts = safeOpts(options);
   try {
     const locator = typeof target === "string" ? page.locator(target).first() : target;
-    await locator.waitFor({ state: "visible", timeout: options.timeout || 10000 });
+    await locator.waitFor({ state: "visible", timeout: opts.timeout || 10000 });
     await locator.scrollIntoViewIfNeeded().catch(() => {});
 
     const box = await locator.boundingBox();
@@ -318,32 +304,18 @@ export async function humanClick(page, target, options = {}) {
       return;
     }
 
-    // 2D Gaussian targeting centered inside the element
     const gx = clamp(gaussianRandom(0.5, 0.12), 0.2, 0.8);
     const gy = clamp(gaussianRandom(0.5, 0.12), 0.2, 0.8);
     const targetX = box.x + box.width * gx;
     const targetY = box.y + box.height * gy;
 
-    // 1. Natural neural glide to element
-    await humanGlide(page, targetX, targetY, options);
-
-    // 2. Pre-click dwell (crisp biological reflex: 25-65ms)
-    const preClickDwell = Math.round(randomFloat(25, 65));
-    await new Promise((r) => setTimeout(r, preClickDwell));
-
-    // 3. Mouse down (switch depress)
+    await humanGlide(page, targetX, targetY, opts);
+    await new Promise((r) => setTimeout(r, Math.round(randomFloat(25, 65))));
     await page.mouse.down();
-
-    // 4. Click hold duration (physical microswitch: 35-75ms)
-    const holdDuration = Math.round(randomFloat(35, 75));
-    await new Promise((r) => setTimeout(r, holdDuration));
-
-    // 5. Mouse up (switch release)
+    await new Promise((r) => setTimeout(r, Math.round(randomFloat(35, 75))));
     await page.mouse.up();
-
-    // 6. Post-click reaction delay (30-80ms)
-    const postClickDelay = Math.round(randomFloat(30, 80));
-    await new Promise((r) => setTimeout(r, postClickDelay));
+    await new Promise((r) => setTimeout(r, Math.round(randomFloat(30, 80))));
+    await locator.click({ force: true }).catch(() => {});
   } catch (err) {
     try {
       const loc = typeof target === "string" ? page.locator(target).first() : target;
@@ -352,13 +324,11 @@ export async function humanClick(page, target, options = {}) {
   }
 }
 
-/**
- * Hover over an element with smooth human kinematic glide.
- */
 export async function humanHover(page, target, options = {}) {
+  const opts = safeOpts(options);
   try {
     const locator = typeof target === "string" ? page.locator(target).first() : target;
-    await locator.waitFor({ state: "visible", timeout: options.timeout || 8000 });
+    await locator.waitFor({ state: "visible", timeout: opts.timeout || 8000 });
     await locator.scrollIntoViewIfNeeded().catch(() => {});
 
     const box = await locator.boundingBox();
@@ -372,7 +342,7 @@ export async function humanHover(page, target, options = {}) {
     const targetX = box.x + box.width * gx;
     const targetY = box.y + box.height * gy;
 
-    await humanGlide(page, targetX, targetY, options);
+    await humanGlide(page, targetX, targetY, opts);
     await new Promise((r) => setTimeout(r, Math.round(randomFloat(25, 75))));
   } catch (e) {
     try {
@@ -382,11 +352,9 @@ export async function humanHover(page, target, options = {}) {
   }
 }
 
-/**
- * Natural cursor wander / drift across the screen to simulate reading eyes.
- */
 export async function humanWander(page, options = {}) {
   try {
+    const opts = safeOpts(options);
     const vp = page.viewportSize() || { width: 1280, height: 800 };
     const cur = getMousePosition(page);
 
@@ -396,29 +364,19 @@ export async function humanWander(page, options = {}) {
     const safeX = clamp(targetX, vp.width * 0.1, vp.width * 0.85);
     const safeY = clamp(targetY, vp.height * 0.12, vp.height * 0.85);
 
-    await humanGlide(page, safeX, safeY, options);
+    await humanGlide(page, safeX, safeY, opts);
   } catch (e) {}
 }
 
-/**
- * Human wheel scrolling with inertia decay over multiple frames.
- */
-export async function humanScroll(page, deltaY, options = {}) {
+export async function humanScroll(page, deltaY) {
   try {
-    const chunks = Math.max(4, Math.min(12, Math.round(Math.abs(deltaY) / 60)));
-    let remaining = deltaY;
+    const detent = 100;
+    const direction = deltaY >= 0 ? 1 : -1;
+    const notches = Math.max(1, Math.round(Math.abs(deltaY) / detent));
 
-    for (let i = 1; i <= chunks; i++) {
-      const fraction = (chunks - i + 1) / ((chunks * (chunks + 1)) / 2);
-      const stepDelta = Math.round(deltaY * fraction + gaussianRandom(0, 3));
-      remaining -= stepDelta;
-
-      await page.mouse.wheel(0, stepDelta);
-      await new Promise((r) => setTimeout(r, Math.round(randomFloat(14, 38))));
-    }
-
-    if (Math.abs(remaining) > 0) {
-      await page.mouse.wheel(0, remaining);
+    for (let i = 0; i < notches; i++) {
+      await page.mouse.wheel(0, direction * detent);
+      await new Promise((r) => setTimeout(r, Math.round(randomFloat(65, 140))));
     }
   } catch (e) {}
 }

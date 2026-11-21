@@ -19,7 +19,7 @@ import crypto from "node:crypto";
 const CAMOUFOX_PATH = "file:///C:/Users/rudra/AppData/Roaming/npm/node_modules/camoufox-cli/node_modules/camoufox-js/dist/index.js";
 const { Camoufox } = await import(CAMOUFOX_PATH);
 
-const DEFAULT_PROXY = "customer-mobile_1465757f:WG0F=DD_9q=E@pr.oxylabs.io:7777";
+const DEFAULT_PROXY = process.env.OXYLABS_PROXY || "";
 const profileDir = path.resolve("output", "profiles facebook", "WilsonYurcak691555");
 
 function parseProxy(proxyStr) {
