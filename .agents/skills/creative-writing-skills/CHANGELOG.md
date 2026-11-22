@@ -1,0 +1,487 @@
+# Changelog
+
+## [Unreleased]
+
+## [0.7.7] - 2026-11-11
+
+### Changed
+- Requires meridian-base 0.15 (`/correct` fixes causes instead of logging corrections; the corrections register is gone).
+
+## [0.7.6] - 2026-11-11
+
+### Changed
+- `writer`: defaults to Opus (high effort) instead of Gemini 4 Argon.
+
+## [0.7.5] - 2026-11-10
+
+### Changed
+- `story-workflow`: when the author hasn't settled a term or direction, ask them until it is (`/grill`, available to `muse`).
+- `story-memory`: a settled creative choice goes on its topic page with its reason; a rejected alternative only with what ruled it out.
+- `writing-principles`: explaining and resolving helps in conversation and does the reader's work in fiction; the failure modes follow from that.
+- `story-review` prose critique: shows the writer what a reader would hit; a strong section may get a brief note.
+
+## [0.7.4] - 2026-11-09
+
+### Changed
+- `story-workflow`: muse briefs `kb-lead` with what settled and the files that show it, not the author's decisions quoted with their hedges, and marks a trial as a trial. Quoted lines got written into the kb as rulings.
+
+## [0.7.3] - 2026-11-07
+
+### Changed
+- Every agent now runs with full access and never prompts for approval, matching meridian-dev-workflow. The shell is no longer limited to a short list of commands, and `critic`, `continuity-checker`, `character-sim` and `reader-sim` are no longer read-only. Agents still can't run `git revert`, `git checkout --`, `git restore`, `git reset --hard` or `git clean`, so the author's manuscript can't be reverted. The review agents' instructions still tell them to diagnose rather than rewrite.
+
+### Fixed
+- `muse` no longer starts in Claude's manual permission mode, where it asked before every shell command outside its short list.
+- Syncing the package no longer warns that four agents lose shell restrictions on `.claude`.
+- Removed the Fable entries from six agents' `model-policies`. They were never fallbacks and changed no setting, so they only made it look as though those agents run on Fable. `-m fable` still works.
+- `writing-staffing` puts the default first: lanes on different angles run on their agents' default models. Fan-out (the same question on two model families) is defined once, says that a family is a provider, so Opus and Fable are one family, and runs through `meridian spawn -m` because the harness's own agent tool reaches only its own provider.
+
+## [0.7.2] - 2026-11-06
+
+### Changed
+- Renamed the fiction research agent from `web-researcher` to `creative-researcher`, so it no longer clashes with `meridian-dev-workflow`'s `web-researcher`. Call `@creative-researcher` instead.
+- `creative-researcher` can now use bash.
+
+## [0.7.1] - 2026-11-06
+
+### Changed
+- Requires meridian-base 0.14, so the package resolves alongside current meridian-dev-workflow. The plugin picks up its updated shared skills.
+- Building and releasing now needs Mars 0.26.2 or newer.
+
+## [0.7.0] - 2026-10-28
+
+### Added
+- `story-workflow` skill: the lifecycle of story work with an author, from reading their intent through direction, drafting, critique, the verdict, knowledge capture and presenting. Plans mark which parts the author confirmed and which are provisional, and critique stops after two completed critique/revise rounds per chapter, when the author decides.
+- `writing-staffing` resources `producers.md` and `reviewers.md` hold the per-agent dispatch entries.
+- The AI-prose antipatterns catalog is `writing-principles` `resources/antipatterns.md` (moved from `story-review`), so writers and critics reach it from the skill both load. It lists negation pairs ("It wasn't anger. It was something quieter."), and every prose mode checks a draft against the catalog before handing it back.
+
+### Changed
+- `creative-writing-muse` is the muse's method everywhere, rewritten to the solo-dev shape: the muse talks, plans, and drafts itself and spawns what needs a context of its own (critique lanes, continuity, reader-sim, research, alternate takes, `@kb-lead`). It no longer assumes there are no subagents, and states its read of each pass in one line instead of answering six self-prompt questions (#8.5).
+- The `muse` agent loads `creative-writing-muse`, `story-workflow`, `creative-writing-craft` and `story-memory`, and its body keeps only the job, the verdict it owns, the `@kb-lead` hand-off and the report, so Meridian, plugin and skills-only users run one copy of the method (#10.3). It can spawn `@explorer`, which `grill-with-docs` uses; `@editor` is gone from its subagents.
+- `@kb-lead` stays the knowledge-capture hand-off: muse spawns it when a chapter, revision or ruling settles and work will pause, with the author's decisions quoted with their hedges; without subagents, muse applies `story-memory` itself (#10.4).
+- `@critic` runs one lane, a focus area or an edit level, and absorbs the editor's holistic pass as the editorial-review lane.
+- `@writer` and `@critic` no longer load `llm-writing`; `writing-principles` no longer tells agents to load it. Muse, brainstormer, character-sim, reader-sim, style-creator and story-memory's reference writing keep it.
+- `writing-staffing` says to tell an agent which skills to load and which files to pass, instead of "attach", which only Meridian has (#11). It is now model-invocable, so a skills-only session with subagents can load it, and the files each agent needs live in `story-memory` `resources/story-context.md`.
+- Agent bodies hold only the job, boundaries, engagement and report; their method moved into the skills they load: brainstorm report shape into `brainstorming.md`, what an outline beat carries into `chapter-and-scene.md` § Writing an Outline, continuity's decision and vocabulary checks into `continuity.md`, the "errors cluster in the middle" check into `prose-critique.md`, and style files without samples into `style-analysis.md`.
+- `story-planning` `resources/creative-direction.md` no longer hands chapter drafting off by default; who drafts is `creative-writing-muse`'s call.
+- Delegation in `story-workflow` and `creative-writing-muse` turns on whether this package's agents can be spawned, not on whether the harness has subagents, so a Codex or OpenCode session with native subagents but no package agents runs each lane itself.
+- `reader-sim` reports through the reward channels `writing-principles` defines instead of restating them.
+- Agent and skill descriptions open with when to use them and say what to pass and what comes back (`brainstormer`, `critic`, `outliner`, `writer`, `continuity-checker`, `muse`, `character-sim`, `reader-sim`, `creative-writing-craft`).
+- Releases use `mars version` (Mars 0.20.6+), which also promotes this changelog; CI pins Mars 0.20.6.
+
+### Removed
+- **Breaking:** the `editor` agent. Spawn `@critic` with the edit level (editorial review for the holistic pass, or developmental, line edit, copyedit, proofreading); the method stays in `story-review` `resources/editorial-review.md`.
+- **Breaking:** the `creative-writing-modes` skill. Its modes are `creative-writing-craft` `resources/prose-modes.md`; load `creative-writing-craft` instead.
+- `story-memory` `resources/story-reference-writing/reference-modes.md`, folded into `resources/story-reference-writing.md`.
+- The uncompiled `agents/character-sim.author-variant`.
+- `scripts/release.sh`, which only existed to build the plugin twice around mars-agents#239.
+- Tracked `.claude/` and `.codex/` files: stale copies of meridian-base hooks that no settings file registered, the `/bs`, `/write`, `/kb` and `/critique` commands (they named skills that no longer exist), and personal permission settings. Both directories are now ignored, so `mars sync` and `mars version` run in the repo.
+
+### Fixed
+- `prose-critique.md` and `baseline.md` give the real path to the metrics script, `<skill folder>/resources/prose-critique/analyze.py`, run from the project, and say `python3` runs it; the script names a missing input file instead of printing only its usage line (#8.1).
+- `brainstorming/worldbuilding.md` points to `story-memory`'s reference writing instead of a `wiki-docs` skill that does not exist, and `scene-construction.md` sends sentence rhythm to `resources/prose-writing.md` instead of its own skill (#10.6).
+- Resource files no longer carry skill frontmatter (`name:`, `model-invocable:`) left from when they were skills.
+
+## [0.6.1] - 2026-10-27
+
+### Fixed
+- The release build leaves `plugin/` matching a fresh `mars build plugin`, so the tag's CI check and GitHub Release run.
+
+## [0.6.0] - 2026-10-27
+
+### Changed
+- Requires meridian-base >=0.13.0 (schema 1).
+- Agent and skill definitions use Mars schema 1; requires Mars >=0.20.0 and Meridian >=0.15.0 (meridian-cli on Mars 0.20).
+- The plugin ships the closure of what its files reference, not just this package's agents. The `meridian-base` include filter now also carries the delegates `explorer`, `session-miner`, `kb-lead`, `kb-maintainer`, and `cold-reader`, and the skills `grill`, `correct`, `qi-maintenance`, and `shared-workspace`: 16 agents and 28 skills, up from 11 and 24. A skill naming an item outside the filter used to ship a reference to nothing.
+- `scripts/check_refs.py` lists every `@agent` and `/skill` in the built Claude tree that does not resolve to a shipped item; CI and the pre-commit hook run it after the rebuild, replacing the reference lint `scripts/sync_cw_skills.py` used to do.
+- The Claude/plugin distribution is generated by `mars build plugin` into `plugin/`, replacing the hand-maintained `cw/` tree. An include filter on the `meridian-base` dependency keeps meridian-base's operational agents, skills, and the `context-autosync` hook out; it now also carries Cursor and OpenCode trees.
+- `project-setup` is a source skill again: user-invoked (agents do not call it) and shipped in the plugin, with one setup-and-walkthrough resource per environment (meridian-cli, Claude Code, claude.ai/Desktop/Cowork, Codex/Cursor/OpenCode/Grok).
+- The README's Quick Start leads with running `project-setup` once, with the command for each environment.
+- **Breaking:** the marketplace is named `creative-writing-skills` instead of `cw`. Existing users add the marketplace again, then install `creative-writing-skills@creative-writing-skills`.
+- `scripts/create_skill_zips.py` packages `plugin/claude/skills`, and `scripts/release.sh` rebuilds `plugin/` at the new version inside the release commit.
+
+### Removed
+- `cw/` and `scripts/sync_cw_skills.py`, replaced by the Mars plugin build. The Claude plugin manifest and marketplace catalogs are now generated files.
+- The hand-adapted plugin copies of `writing-staffing`, `grill-with-docs`, `shared-dao`, `md-validation`, `zoom-out`, `kb-management`, and `project-setup`, along with the lint that kept meridian-cli commands and environment variables out. The plugin ships the source skills as Mars lowers them; `bootstrap/project-setup` still runs the automatic meridian-cli first-session setup, and `kb-management`'s kb layout guidance moved into `story-memory` as `resources/kb-layout.md`.
+
+### Fixed
+- `bootstrap/project-setup` points at the `project-setup` skill and its meridian-cli walkthrough instead of repeating the interview, so setup questions and file steps have one source.
+
+## [0.5.19] - 2026-10-25
+
+### Changed
+- Requires Meridian >=0.14.5 and accepts meridian-base 0.12, which moved Meridian's own skills into Meridian.
+- Writing agents and staffing guidance name portable coordination capabilities instead of Meridian CLI commands, flags, and environment-specific model aliases.
+- Regenerated the `cw/` distribution from the portable source prompts and meridian-base 0.12.
+- Story-context guidance names the capability to read past sessions instead of a package skill.
+
+### Fixed
+- Delegation guidance consistently says to attach skills, pass files, and carry a prior run while preserving the pass-versus-point-to-location distinction.
+- Story-context guidance distinguishes the current author conversation from a prior run when carrying unwritten intent.
+
+## [0.5.18] - 2026-10-25
+
+### Changed
+- Requires Meridian >=0.14.0 and Mars >=0.18.0 for portable network policies.
+- `@web-researcher`'s regenerated Claude.ai/plugin mirror retains the source profile's Bash denial.
+
+## [0.5.17] - 2026-10-25
+
+### Changed
+- Requires Meridian >=0.13.0 for platform-owned Meridian command permissions.
+- Agents rely on Meridian's platform grants for read-only and declared-subagent commands instead of repeating them in tool rules; the web researcher no longer grants unrelated write-capable Meridian commands.
+
+## [0.5.16] - 2026-10-23
+
+### Fixed
+- Claude plugin: rebuilt with current Mars, which reads a tools list as grants only, so agents no longer carry tool allowlists; `disallowed-tools` (Edit and Write on the read-only agents) still applies. Agents use Claude's real tool names (`NotebookEdit`, `AskUserQuestion`) and current Bash patterns. This also fixes the writing agents' old lists, which left out `Read`, and lets muse reach its subagents.
+- Claude plugin: knowledge-layers picks up meridian-base 0.11.15 (invariants vs current choices, link to the work's own docs).
+
+## [0.5.15] - 2026-10-23
+
+### Changed
+- writer defaults to `argon` (Gemini 4 Argon, through OpenCode) and falls back to Opus, then Sonnet, when it can't be routed. `argon-contributor`, a free endpoint that may train on your text, is explicit-only. Sol and DeepSeek are no longer writer backups.
+- muse can run on `argon` when you ask for it (`-m argon`); it is never an automatic fallback.
+- Requires meridian-base 0.11.15 or a later 0.11 release, which defines the `argon` aliases.
+
+## [0.5.14] - 2026-10-18
+
+### Changed
+- No agent falls back to Fable (`no-fallback: true` on brainstormer, character-sim, critic, editor, muse, reader-sim, style-creator, writer); Fable is escalation only, still selectable explicitly.
+
+## [0.5.13] - 2026-10-18
+
+### Changed
+- Project conventions live in `AGENTS.md`, not `CLAUDE.md`: `project-setup` writes `AGENTS.md`, and `kb-management`, `grill-with-docs`, `shared-dao` and `/kb` read it. Claude Code reads `AGENTS.md` itself, so setup no longer writes a `@AGENTS.md` mirror.
+
+## [0.5.12] - 2026-10-15
+
+### Changed
+- Writing agents default to `opus` (Opus 5.5) instead of `opus46`. Dropped `opus46[1m]` and `opus48` fallbacks. `sonnet5` → `sonnet` (`@outliner` and `@continuity-checker` default to it). `@web-researcher`: undefined `deepseekflash` folded into `deepseek`.
+
+## [0.5.11] - 2026-10-08
+
+### Fixed
+- Corrected story-planning resource paths in both the source skill and the generated `cw/` distribution.
+
+### Changed
+- `structured-artifact` in `cw/` is now generated from the `meridian-base` release instead of hand-maintained, and `information-hierarchy` picks up the revised `meridian-base` version. The minimum `meridian-base` dependency is now `>=0.10.16`.
+- Refreshed generated Claude agent model mappings against the current dependency aliases.
+
+## [0.5.10] - 2026-09-17
+
+## [0.5.10] - 2026-09-17
+
+### Added
+- Depend on `haowjy/writing-sync` for the `writing-sync` skill.
+
+### Changed
+- Character prose now requires character state (history, circumstances, current knowledge) alongside style. Contradictions are written and flagged; wiki updates wait for the author.
+
+## [0.5.9] - 2026-08-08
+
+### Changed
+- Aligned agent model policies by cognitive role: `sol` for creative judgment, `terra` for structured synthesis, and `luna` for mechanical research; removed active `gptmini` usage and retained `deepseekflash` only for cheap information gathering.
+- Distinguished same-prompt, cross-model fan-out from parallel focus lanes in writing staffing and critique guidance.
+- Refreshed the generated `cw/` distribution against the current Mars dependency output.
+
+## [0.5.8] - 2026-07-29
+
+## [0.5.7] - 2026-07-28
+
+## [0.5.6] - 2026-07-09
+
+### Changed
+- Bump meridian-base dependency to `>=0.8.0, <0.9.0`.
+
+## [0.5.5] - 2026-07-04
+
+## [0.5.4] - 2026-07-04
+
+## [0.5.3] - 2026-07-04
+
+## [0.5.2] - 2026-06-29
+
+## [0.5.1] - 2026-06-29
+
+## [0.5.0] - 2026-06-29
+
+### Changed
+- Preserved writing-craft, reader-interest, and book-editor research notes under `docs/research/` so source links survive beyond the active work directory.
+- Added an `editor` agent for holistic third-party editorial memos and expanded `story-review` with editorial, developmental edit, line edit, copyedit, and proofreading resources.
+- Added curiosity / prediction reward to `writing-principles` as an explicit reader-reward channel, with citations for curiosity and information-gap theory.
+- Promoted `creative-writing-muse` to a generated, skills-only single-agent muse mode; the `muse` agents now own Product Lead-style routing, specialist prompt-crafting, synthesis, and author-facing communication directly.
+- Reworked `scripts/sync_cw_skills.py` to build a temporary Mars consumer and copy selected `.claude/skills` output into `cw/skills`, while keeping cw-adapted skills manual.
+- Collapsed the public writing skill surface into clustered skills: `creative-writing-modes`, `creative-writing-craft`, `story-planning`, `story-review`, `story-memory`, `reader-sim`, and `character-sim`; production writing stays routed through the single `writer` agent.
+- Updated `llm-writing` for intentional human-facing writing and moved the cw copy to the generated Mars-lowered skill set now that the updated `meridian-base` release is available.
+- Added native Mars targets for `.claude`, `.cursor`, `.codex`, and `.opencode` with `agent_emission = "always"` so harness-native agent artifacts can be generated.
+
+### Removed
+- Removed `bard`, `revision-writer`, `bridge-writer`, and `lore-keeper`; their production and knowledge-routing responsibilities are consolidated into `writer`, `muse`, `chronicler`, and staffing skills.
+- Removed the old `cw-muse` skill in favor of `creative-writing-muse`.
+
+## [0.4.0] - 2026-06-21
+
+### Added
+- 5 new skills extracted from agent bodies: `character-voice`, `reader-experience`, `fact-extraction`, `production-drafting`, `creative-direction`. Methodology now lives in skills; agent bodies are thin wrappers.
+
+### Changed
+- All 14 agent descriptions rewritten as when/why selection signals (no spawn commands, no internal mechanics, no agent cross-references).
+- 8 skill descriptions tightened (removed filler, agent-specific references, internal mechanics).
+- `muse`, `bard`, `character-sim`, `reader-sim`, `chronicler`: agent bodies thinned to load extracted skills.
+
+## [0.3.13] - 2026-06-17
+
+## [0.3.12] - 2026-06-14
+
+### Changed
+- `lore-keeper`, `chronicler`, `muse` agents: `kb-conventions` → `knowledge-layers`.
+- `writing-artifacts` skill, `docs/architecture.md`, and `scripts/sync_cw_skills.py` lint regex updated for the rename.
+
+## [0.3.11] - 2026-06-13
+
+### Fixed
+- `cw/.claude-plugin/plugin.json`: added the plugin manifest. Without it, adding the marketplace from GitHub (Cowork / claude.ai) failed with "No manifest found in directory" — Claude Code auto-discovers components locally without a manifest, but the marketplace add path validates the plugin and rejects it when the manifest is missing. `version` is omitted so the plugin tracks the git commit SHA.
+- All agents: remove invalid `tools:` deny rules (`cron`, `notifications`, `plan_mode`, `worktree`) — no matching tools in harness.
+
+### Added
+- CI/release: `claude plugins validate cw` step, validating the cw plugin manifest plus every agent/skill component file. The existing `claude plugins validate .claude-plugin/marketplace.json` only checks the marketplace schema, not the plugin itself — which is how the missing manifest slipped through.
+
+### Changed
+- README: documented the marketplace-add flow (Customize → Plugins → + → Add marketplace) for Cowork and claude.ai, with manual `.skill` upload kept as the skills-only fallback; clarified that agents run in Cowork but are grayed out in plain claude.ai chat. Compatibility table updated.
+- `marketplace.json`: bumped catalog `metadata.version` 0.2.0 → 0.3.10.
+- AGENTS.md: documented the plugin manifest requirement and the new validation gate.
+
+## [0.3.10] - 2026-06-06
+
+### Changed
+- Lore-keeper: reordered model fallback to prefer `gpt` over `sonnet`.
+
+## [0.3.9] - 2026-06-06
+
+### Added
+- `cw/skills/cw-muse`: session-lead skill for Claude.ai, where there are no subagents. Stands in for the muse agent — brainstorms, drafts, critiques, revises, and maintains the kb in one conversation, driving the craft skills by switching stance. Restores the entry-point role the removed `cw-router` served.
+- `scripts/sync_cw_skills.py`: syncs the generalizable cw skills from canonical `skills/` (body + resources, Claude frontmatter) and lints the cw tree for drift, leaked Meridian vocab, and dangling skill/agent refs. `--apply` to sync, default to check. Wired into CI as a drift gate.
+
+### Changed
+- README: Claude.ai install now documents activating `cw-muse` as the entry point.
+- CI/release workflows: dropped the stale `cw/cw-router/SKILL.md` frontmatter check; added the cw sync check.
+
+## [0.3.8] - 2026-06-06
+
+### Added
+- cw skills `intent-modeling` and `grill-with-docs`, adapted from meridian-base and genericized for the flattened plugin. Wired into `muse` (both) and `brainstormer` (intent-modeling).
+
+### Changed
+- cw skills now carry the same content body as canonical instead of ad-hoc condensed copies. The 8 pure-craft skills (brainstorming, prose-critique, prose-writing, scene-construction, story-architecture, style-analysis, writing-issues, writing-principles) are exact mirrors of source, with their `resources/` restored and re-linked (brainstorming 4, prose-critique 8, story-architecture 3, writing-principles 2).
+- cw `story-context`: restored the "Choose the Right Mechanism" and "Cross-Phase Context" guidance, genericized for the Agent-tool model (no `-f`/`--from`/spawn-id mechanics).
+- cw `llm-writing`: synced to current meridian-base canonical.
+
+## [0.3.7] - 2026-06-06
+
+### Changed
+- Resynced the `cw/` Claude.ai/plugin distribution with source — it was last synced before the 0.3.5–0.3.6 agent skill changes and had drifted on frontmatter vocab and skill lists.
+- cw skill frontmatter normalized to Claude vocab: added `name` to all 15 skills; removed Mars-only `type` and `model-invocable`.
+- cw agents `muse`, `style-creator`: removed Mars-only `effort` field.
+- cw agents `critic`, `character-sim`: added `llm-writing` skill (`writing-principles` depends on it).
+- cw workers `writer`, `bridge-writer`, `revision-writer`, `brainstormer`: removed `story-context`; `brainstormer` gains `writing-artifacts` (was wrongly omitted).
+- README: Claude.ai install now links to the latest GitHub Release; build-from-source kept as a fallback note.
+
+## [0.3.6] - 2026-06-05
+
+### Changed
+- Bumped meridian-base dep from `>=0.4.7` to `>=0.7.0` — picks up skill consolidations (decision-log, agent-management, meridian-work-coordination folded into work-artifacts).
+- Model assignments aligned with cognitive role: muse `deepseek` -> `opus` (interactive primary), critic `deepseek` -> `gpt` (adversarial reasoning), bard `deepseek` -> `gpt55` (production execution), chronicler `gptmini` -> `deepseekflash` (cheap extraction).
+- Muse: 14 always-loaded skills -> 6 load + 6 available. Principles and spawn stay loaded; brainstorming, shared-dao, grill-with-docs load on demand.
+- Bard: 9 skills -> 4 load + 3 available. Same progressive loading split.
+- Lore-keeper: 16 skills -> 5 load + 9 available. Routing reference skills load on demand. Removed @code-mirror reference (not in package, use @kb-writer).
+- Continuity-checker: added read/rg/cat/find tools (body requires file navigation but tools didn't permit it).
+- Critic: added read/rg tools, added llm-writing (writing-principles requires it).
+- Character-sim: added llm-writing (writing-principles requires it).
+- Workers (writer, revision-writer, bridge-writer, brainstormer): removed story-context from skills — caller-side guidance wastes context on voice-sensitive agents.
+- `brainstorming`, `writing-issues`: set `model-invocable: true` (now in available lists, need loading mechanism).
+- `writing-staffing`: updated convergence logging ref (decision-log -> work directory).
+- `writing-staffing/resources/researchers.md`: muse does web research directly, not via @web-researcher.
+- Removed tracked `mars.lock`; lock is generated local state and ignored.
+
+### Removed
+- `agent: deny` and `task: deny` from all agent tool lists — handled by `deny_headless_harnesses` now.
+
+### Fixed
+- Removed stale base skill refs: `agent-management`, `decision-log`, `meridian-work-coordination` replaced with `work-artifacts` on bard and lore-keeper.
+- Muse: `approval: yolo` → `approval: never` (deprecated alias).
+- Chronicler: "before committing" -> "before reporting".
+- Outliner description grammar fix.
+- `meridian-prompter` URL: `meridian-flow` → `haowjy` (canonical).
+
+## [0.3.5] - 2026-05-23
+
+### Added
+- Shared vocabulary discipline: muse, lore-keeper, bard, chronicler, and continuity-checker now load or apply `shared-dao` patterns for canonical story terms.
+- `cw/skills/shared-dao`: Claude Code vocabulary skill for story terms, aliases, and ambiguity resolution.
+
+### Changed
+- Muse now grounds recommendations in existing vocab/context, uses focused discovery before vocabulary decisions, and records settled terminology before production handoff.
+- Lore-keeper now follows a kb-lead-style coordination loop for story knowledge layers, routing, coverage review, and structural health.
+- Chronicler now reports candidate terminology separately from settled vocab updates instead of canonizing terms from chapter usage.
+- Project setup and story context now include `vocab.md` scaffolding and vocab handoff guidance.
+
+## [0.3.4] - 2026-05-17
+
+## [0.3.3] - 2026-05-16
+
+## [0.3.2] - 2026-05-16
+
+## [0.3.1] - 2026-05-16
+
+## [0.3.0] - 2026-05-15
+
+### Changed
+- All agents: removed `fanout:` from profile frontmatter. Fallback candidates now declared via `model-policies` list order, matching mars-agents profile schema.
+
+## [0.2.1] - 2026-05-11
+
+## [0.2.0] - 2026-05-11
+
+## [0.1.5] - 2026-05-11
+
+### Changed
+- `mars.toml`: meridian-base pin relaxed from exact `v0.3.0` to `>=0.3.0, <0.4.0`. Lets consumers pick up meridian-base patch releases (including `qi-layer` skill in v0.3.10) without re-tagging creative-writing-skills.
+
+## [0.1.4] - 2026-05-09
+
+### Added
+- `writing-principles`: economy section: every element does more than one thing, economy as counter-discipline to LLM completeness pull. Uses rhetorical questions (experimental, see README).
+- `cw/skills/llm-writing`: LLM writing awareness skill for Claude Code plugin: behavioral pulls, conversational mode leaking.
+- `cw/` agents: `llm-writing` added to muse, writer, revision-writer, bridge-writer, brainstormer, reader-sim, chronicler, style-creator.
+
+### Changed
+- All skills: added `type:` field (`principle` for writing-principles, `reference` for all others) for ordered injection consistency with meridian-base.
+- Bumped meridian-base to v0.3.0.
+
+## [0.1.3] - 2026-05-08
+
+## [0.1.2] - 2026-05-03
+
+### Changed
+- Skill schema: migrated from `invocation: explicit/implicit` to `model-invocable: false` / removed. Some skills previously marked explicit are now model-discoverable. `invocation: implicit` skills had field removed (both booleans default true).
+- Bumped meridian-base to v0.2.4.
+
+### Added
+- Claude Code plugin under `cw/`: full translation of all 12 agents and 12 skills for flat subagent hierarchy (no `meridian spawn`, no env vars). Muse absorbs bard's drafting loop and lore-keeper's KB dispatch.
+- `cw/skills/project-setup`: user-invocable-only skill for guided project setup in Claude Code (creates CLAUDE.md, kb/ structure, optional style analysis).
+- `.claude-plugin/marketplace.json`: marketplace named `cw` with all plugin paths under `cw/agents/` and `cw/skills/`.
+- Cowork installation path in README (same plugin format as Claude Code).
+- Claude.ai installation path in README (upload `.skill` zips generated by `scripts/create_skill_zips.py`).
+
+### Changed
+- `muse`: removed Edit/Write from disallowed-tools, added to tools list.
+- `muse`: added reader-sim routing for quick experiential reads on pivotal scenes.
+- `bard`: added character-sim routing for voice exploration mid-production.
+- `writing-artifacts` skill: added shared workspace section: agents read current file state, treat disk as authority, surface conflicts, respect author's direct edits.
+- `docs/architecture.md`: rebuilt all 4 mermaid diagrams and skill reuse table for current agent/skill roster.
+- `scripts/create_skill_zips.py`: removed stale `cw/cw-router` references.
+- README: rewritten installation section (Mars, Claude Code, Cowork, Claude.ai). Added Cowork column to compatibility table.
+
+### Removed
+- `wiki-docs` skill: superseded by kb-conventions from meridian-base.
+- `cw-router` skill: stale routing guide referencing deleted agents and skills.
+
+## [0.1.1] - 2026-05-03
+
+### Changed
+- Bumped meridian-base dep to v0.2.2.
+- Removed deprecated `.agents` target.
+
+## [0.1.0] - 2026-05-03
+
+### Added
+- `bard` agent: production drafting lead (ghost writer). Mode-switches through agents for write/critique/revise loops. Manages parallel drafts and competing takes for pivotal passages.
+- `revision-writer` agent: surgical revision from critique findings. Preserves voice while fixing specific issues.
+- `bridge-writer` agent: connective prose: transitions, time compression, bridging passages between pivotal scenes.
+- `muse` agent: author-facing orchestrator. Intent capture, creative synthesis, routing. Replaces `story-orchestrator`.
+- `lore-keeper` agent: kb maintenance orchestrator. Dispatches chronicler, kb-maintainer, kb-writer. Replaces `knowledge-orchestrator`.
+- `scene-construction` skill: beat-level craft: scene entry, dialogue, pacing, transitions. Separated from prose-writing.
+- `style-analysis` skill: methodology for analyzing prose and producing style reference files. Extracted from style-creator agent body.
+- `bootstrap/project-setup`: guided creation of project `AGENTS.md`. Asks about the project, suggests kb structure, collects writing samples for style analysis.
+- `model-policies` and `fanout` on all agents: per-model effort tuning and multi-provider support. Every agent works for OpenAI-only and Claude-only users.
+- `gpt55` and `opus47` model aliases in mars.toml.
+
+### Changed
+- Agent design overhaul: agents carry stance, skills carry methodology. Removed procedural methodology from agent bodies, added skill callouts instead.
+- Positive framing throughout: replaced "what not to do" sections with "what to do." Kept negative framing only for bright-line prohibitions.
+- Removed role identity ("You are a...") from all agents per PRISM research.
+- `writer`: rewritten as generative prose stance. Description routes to @revision-writer and @bridge-writer for other writing modes.
+- `style-creator`: methodology extracted to `style-analysis` skill, agent body reduced to stance (~20 lines).
+- `critic`: default model opus → sonnet (cost-efficient for 3-5 critic fan-outs). Opus available via fanout for final-pass.
+- `reader-sim`: rewritten. Added reader questions. Set model to opus.
+- `brainstormer`: removed interactive mode reference, cleaned agent workflow leakage.
+- `chronicler`: added `kb-conventions` skill, rewritten opener.
+- `character-sim`: fixed handoff (chronicler → lore-keeper), added `story-context` skill.
+- `continuity-checker`: fixed overclaimed "full project" coverage → "provided canon."
+- `outliner`: removed contrast framing and "what you do not do" section.
+- `prose-writing` skill: rewritten around immersion patterns: psychic distance, free indirect discourse, sentence rhythm. Scene-level content moved to `scene-construction`.
+- `writing-principles` skill: replaced "How to Write" craft checklist with routing to prose-writing and scene-construction.
+- `writing-artifacts` skill: stripped to essentials: work layout + pointers to kb-conventions and AGENTS.md. KB structure deferred to bootstrap. Bare `kb/` and `work/` shorthand replaced with env vars.
+- `writing-staffing` skill: decoupled from named agent roster. Body teaches principles, resources hold agent catalogs.
+- `brainstorming` skill: fixed provenance (all report sections tagged `<AI>`), removed agent workflow leakage, file placement defers to writing-artifacts.
+- `prose-critique` skill: "err toward calling it out" → "only flag issues you can tie to a concrete reader cost."
+- `story-architecture` skill: dropped "not prescriptive" disclaimer: owns its opinions.
+- `story-context` skill: stripped spawn command examples, kept judgment guidance.
+- All skills: migrated to canonical `invocation: explicit` (from legacy `disable-model-invocation`/`allow_implicit_invocation`). Three safety-net skills set to `invocation: implicit`: writing-principles, story-context, writing-artifacts.
+- All agents: removed hardcoded `kb/` and `work/` paths from descriptions and bodies.
+- `mars.toml`: pinned `opus` to 4.6 (4.7 literal instruction-following hurts creative work). Renamed `mini` → `gptmini`. Added `default_effort` to all aliases. Removed `haiku` (prefer gptmini for cost).
+- Bumped `meridian-base` dependency to `v0.2.1`.
+
+### Removed
+- `draft-orchestrator`: replaced by `bard`.
+- `story-orchestrator`: replaced by `muse`.
+- `knowledge-orchestrator`: replaced by `lore-keeper`.
+- `explorer`, `researcher`, `session-miner`, `wiki-editor`, `graph-maintainer`: consolidated into base package agents.
+- `orchestrate` skill: coordination methodology moved to agent bodies and writing-staffing.
+- `story-decisions` skill: decisions handled by `decision-log` from meridian-base.
+
+## [0.0.15] - 2026-05-01
+
+### Changed
+- 3 orchestrators (`story-orchestrator`, `draft-orchestrator`, `knowledge-orchestrator`): scoped Bash tool allowlists to `meridian spawn/work/context/session` + read commands. Unrestricted `Bash` on coordinator-altitude agents created escape hatches that undermined the delegation model.
+- `explorer`, `continuity-checker`: added `Bash(meridian kg *)` to tool allowlists: bodies referenced `meridian kg graph` but scoped tools didn't permit it.
+- `draft-orchestrator`: added explicit `reader-sim` dispatch (post-convergence experiential pass) and `continuity-checker` dispatch (deep cross-project checks). Previously only documented in README/architecture but not operationalized in the orchestrator prompt.
+- `draft-orchestrator`: now promotes recurring critic findings to `kb/issues/`: critics are read-only and report as spawn output.
+- `reader-sim`: removed file-writing instructions (agent is read-only, reports as spawn output). Trimmed four-channel restatement to reference loaded `writing-principles` skill.
+- `writing-artifacts`: fixed ownership table: critics report findings as spawn output, `draft-orchestrator` promotes to `kb/issues/`. `work/critique-reports/` written by draft-orchestrator synthesis, not critics directly.
+- `docs/architecture.md`: replaced stale `knowledge-graph`/`mermaid` with `md-validation` in skill dependency diagram. Fixed `character-sim` model (sonnet, not unset). Updated artifact flow for read-only critics. Updated skill reuse summary.
+- `README.md`: fixed skill count (12, not 13), updated skill table (removed deleted `prose-analysis`/`knowledge-graph`/`python-tool-runner`, added `writing-issues`/`orchestrate`), fixed project layout to match `writing-artifacts` conventions, updated draft loop diagram for reader-sim as post-convergence pass.
+
+## [0.0.14] - 2026-05-01
+
+### Changed
+- 7 agents (`graph-maintainer`, `chronicler`, `wiki-editor`, `explorer`, `outliner`, `continuity-checker`, `knowledge-orchestrator`): replaced `knowledge-graph` and `mermaid` skills with `md-validation` from meridian-base. Agent bodies now reference `meridian kg graph`, `meridian kg check`, `meridian mermaid check` instead of bundled scripts.
+
+### Removed
+- `knowledge-graph` skill: superseded by `meridian kg` (link topology tree, broken link checks). The bundled `graph.py` script is no longer needed.
+- `mermaid` skill: superseded by `meridian mermaid check` + `md-validation` skill from meridian-base. The bundled `check_mermaid.py` script is no longer needed.
+- `meridian-cli` from all agent skill lists (skill deleted from meridian-base). Body references in `explorer` and `session-miner` updated to use `meridian session` CLI commands directly.
+
+## [0.0.9] - 2026-04-22
+
+### Added
+- `orchestrate` skill: shared coordination model for orchestrators (delegation discipline, convergence loops, critique synthesis with reader reward channels, artifact persistence)
+- `mermaid` skill: diagram syntax reference for structure-producing agents
+- `docs/architecture.md`: mermaid diagrams for spawn hierarchy, skill dependencies, model routing, and artifact flow
+- `AGENTS.md`: agent guidance for working with this repository
+- Model aliases in `mars.toml`: opus, sonnet, haiku, mini, codex, gpt with provider/harness routing
+- Mechanical prose analysis bundled into `prose-critique` as optional tooling (analyze.py, antipatterns.md, baseline.md)
+
+### Changed
+- All 17 agents: tightened `tools:` and `disallowed-tools:` to match dev-workflow discipline: orchestrators get `Bash(meridian spawn *)`, workers get scoped tools, read-only agents get specific allowlists, destructive git ops blocked everywhere
+- All 3 orchestrators now load `orchestrate` skill; removed duplicated delegation boilerplate and critic synthesis methodology from agent bodies
+- Story-orchestrator: trimmed skills list from 10 to 8, removed inline reader reward channel triage (now in orchestrate skill)
+- Shell scripts (graph.sh, analyze.sh) replaced with Python equivalents (graph.py, analyze.py)
+- `story-context` updated to use `meridian context kb` / `meridian context work` path resolution
+- `writing-artifacts` layout and promotion rules refined
+- Various skill content improvements across brainstorming, knowledge-graph, story-decisions, wiki-docs, writing-issues, writing-staffing resources
+
+### Removed
+- `prose-analysis` skill: resources moved to `prose-critique` as optional mechanical analysis
+- Shell scripts: `graph.sh`, `analyze.sh`: replaced by Python versions

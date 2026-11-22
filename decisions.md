@@ -1,0 +1,181 @@
+# Autonomous Overnight Execution Decisions Log
+
+Started: 2026-11-12T07:22:00+05:30
+
+## 1. Initial System, Storage & Quota Audit
+- **Disk Space**: `C:` started at 9.32 GB free; Google Drive Desktop (`I:\My Drive\douyin`) shares `C:` local cache. Reclaimed 1,867.5 MB from `output/clean_videos`, `output/知墨探索`, `output/audio_stems`, `output/extracted_music`, and `output/frame_analysis`, bringing `C:` to 11.08 GB free before launch.
+- **Last Batch Transfer**: Moved `I:\My Drive\douyin\Curious Cinefile` (39 items) into `I:\My Drive\douyin\channel pending movies\Curious Cinefile`. Created target batch folders `batch_1`, `batch_2`, `batch_3`, `batch_4`.
+- **GPU Baseline**: NVIDIA GTX/RTX GPU idle at 50°C (0 / 4096 MiB VRAM). Thermal guard configured to pause whenever `temperature.gpu >= 82°C` until cooled `< 68°C`.
+- **TTS Priority Waterfall**: Configured linear cascade `elevenlabs (eleven_v4_turbo)` -> `google (gemini-3.8-flash-tts)` -> `sarvam (bulbul:v4-flash)` -> `chirp (Google Cloud TTS / Google Chat)` -> `kokoro (local ONNX auto-download fallback)`.
+  - Pre-run live quota check:
+    - **ElevenLabs**: 9 active working keys (~74,792 chars remaining); 22 keys blocked (`detected_unusual_activity` on free tier).
+    - **Google Gemini Flash 3.8 TTS**: 13 active keys verified.
+    - **Sarvam (`bulbul:v4-flash`)**: 3 keys at 0 credits (`insufficient_quota_error` — automatically skipped if exhausted).
+    - **Google Chirp / Chat TTS**: Requires Cloud billing (`HTTP 403`) — falls through cleanly to local Kokoro ONNX if reached.
+- **Batch 2 BGM Fix**: Added `disable_bgm=True` so Batch 2 retains isolated DBS-TIGER SFX (`sfx.wav`) and dubbed voiceover without injecting any background music.
+- **Duration Rules**:
+  - Global cap `<= 600s` (10 minutes) enforced across all batches.
+  - Batch 4 strict cap `<= 180s` (3 minutes) checked BEFORE downloading via `DownloaderAPI.probe_video_duration(url)`, with post-download `ffprobe` verification if metadata probe returns `None`.
+- **Batch 4 Hindi Rule**: Will only run if live active ElevenLabs quota remains (`> 0` chars) after all 4 English batches complete, using strictly ElevenLabs (`allow_tts_fallback=False`) so no unrequested fallback quota is spent.
+
+## 2. Live Execution Log
+<!-- Runner appends timestamped quota switches, skips, retries, cleanups, and thermal pauses below -->
+- **[2026-11-12 07:24:29]** Overnight autonomous runner started (English Batches 1-4 -> live ElevenLabs check -> conditional Batch 4 Hindi).
+- **[2026-11-12 07:24:29]** batch_1 item 1/29 (7576560382999842048): active TTS engine set to `elevenlabs`.
+- **[2026-11-12 19:17:57]** Overnight autonomous runner started (English Batches 1-4 -> live ElevenLabs check -> conditional Batch 4 Hindi).
+- **[2026-11-12 19:17:57]** batch_1 item 1/29 (7576560382999842048): active TTS engine set to `elevenlabs`.
+- **[2026-11-12 19:21:26]** batch_1 [2/29] FAILED download 7558092762407652668: DownloaderAPI.download_video() got an unexpected keyword argument 'save_dir'
+- **[2026-11-12 19:22:00]** batch_1 [3/29] FAILED download 7552333278879943977: DownloaderAPI.download_video() got an unexpected keyword argument 'save_dir'
+- **[2026-11-12 19:22:37]** batch_1 [4/29] FAILED download 7700506430952000794: DownloaderAPI.download_video() got an unexpected keyword argument 'save_dir'
+- **[2026-11-12 19:23:03]** batch_1 [5/29] FAILED download 7690119603388747054: DownloaderAPI.download_video() got an unexpected keyword argument 'save_dir'
+- **[2026-11-12 19:23:33]** batch_1 [6/29] FAILED download 7687911297102433545: DownloaderAPI.download_video() got an unexpected keyword argument 'save_dir'
+- **[2026-11-12 19:24:05]** batch_1 [7/29] FAILED download 7663400256544967971: DownloaderAPI.download_video() got an unexpected keyword argument 'save_dir'
+- **[2026-11-12 19:24:50]** batch_1 [8/29] FAILED download 7650042787622063410: DownloaderAPI.download_video() got an unexpected keyword argument 'save_dir'
+- **[2026-11-12 19:25:23]** batch_1 [9/29] FAILED download 7638896631034793222: DownloaderAPI.download_video() got an unexpected keyword argument 'save_dir'
+- **[2026-11-12 19:25:55]** batch_1 [10/29] FAILED download 7637426654624664882: DownloaderAPI.download_video() got an unexpected keyword argument 'save_dir'
+- **[2026-11-12 19:26:24]** Overnight autonomous runner started (English Batches 1-4 -> live ElevenLabs check -> conditional Batch 4 Hindi).
+- **[2026-11-12 19:26:24]** batch_1 item 2/29 (7558092762407652668): active TTS engine set to `elevenlabs`.
+- **[2026-11-12 19:32:00]** Added dubbing_studio/narrator_detector.py (hybrid acoustic MFCC/spectral/loudness similarity + Gemini contextual role classification) and wired it into pipeline.py before translation. Translator now receives ONLY [NARRATOR] blocks, and original [DIALOGUE] segments from speech.wav are restored into sfx_with_dialogue.wav so in-scene character dialogues are preserved instead of silenced.
+- **[2026-11-12 19:32:27]** Overnight autonomous runner started (English Batches 1-4 -> live ElevenLabs check -> conditional Batch 4 Hindi).
+- **[2026-11-12 19:32:27]** batch_1 item 2/29 (7558092762407652668): active TTS engine set to `elevenlabs`.
+- **[2026-11-12 19:34:45]** Upgraded SFX isolation in separator.py (v3: music-gated Demucs drums/bass bleed suppression so real movie impacts/footsteps in non-music scenes are preserved + stronger 1.25x speech / 1.10x music Wiener mask at power=1.35 with 0.02 spectral floor) and replaced choppy highpass=220Hz + agate=0.030 in lock_aligner.py with highpass=f=75 + afftdn=nf=-32 + volume=0.88.
+- **[2026-11-12 19:34:54]** Overnight autonomous runner started (English Batches 1-4 -> live ElevenLabs check -> conditional Batch 4 Hindi).
+- **[2026-11-12 19:34:54]** batch_1 item 2/29 (7558092762407652668): active TTS engine set to `elevenlabs`.
+- **[2026-11-12 20:09:26]** Overnight autonomous runner started (English Batches 1-4 -> live ElevenLabs check -> conditional Batch 4 Hindi).
+- **[2026-11-12 20:09:26]** batch_1 item 2/29 (7558092762407652668): active TTS engine set to `elevenlabs`.
+- **[2026-11-13 03:14:17]** Overnight autonomous runner started (English Batches 1-4 -> live ElevenLabs check -> conditional Batch 4 Hindi).
+- **[2026-11-13 03:14:17]** batch_1 item 2/29 (7558092762407652668): active TTS engine set to `elevenlabs`.
+- **[2026-11-13 03:33:48]** Overnight autonomous runner started (English Batches 1-4 -> live ElevenLabs check -> conditional Batch 4 Hindi).
+- **[2026-11-13 03:33:49]** batch_1 item 4/29 (7700506430952000794): active TTS engine set to `elevenlabs`.
+- **[2026-11-13 03:42:08]** Overnight autonomous runner started (English Batches 1-4 -> live ElevenLabs check -> conditional Batch 4 Hindi).
+- **[2026-11-13 03:42:08]** batch_1 item 5/29 (7690119603388747054): active TTS engine set to `elevenlabs`.
+- **[2026-11-13 04:20:56]** batch_1 [23/29] FAILED download 7580584886294170906: Download skipped or missing on disk for ID 7580584886294170906 (2025-12-06 17.30.00-Video-恐怖一分钟-怪物出门猎杀食物，路上却捡了一个‘’女人‘’#大片推荐#电影推荐#神仙剪刀手#科幻).
+- **[2026-11-13 04:35:36]** Completed batch_1: 28 rendered & sorted in Drive, 0 duration-skipped, 1 failed.
+- **[2026-11-13 04:35:36]** batch_2 item 1/33 (7583584749948587318): active TTS engine set to `elevenlabs`.
+- **[2026-11-13 05:01:47]** batch_2 [14/33] FAILED pipeline 7673048472945216774: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 05:02:47]** batch_2 [15/33] FAILED pipeline 7670765996692524326: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 05:03:47]** batch_2 [16/33] FAILED pipeline 7668936671752146228: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 05:04:47]** batch_2 [17/33] FAILED pipeline 7667568748508859683: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 05:05:45]** batch_2 [18/33] FAILED pipeline 7666433316555394354: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 05:06:27]** batch_2 [19/33] FAILED pipeline 7664202530867432767: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 05:07:24]** batch_2 [20/33] FAILED pipeline 7663814009967168768: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 05:08:07]** batch_2 [21/33] FAILED pipeline 7663074481266642211: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 05:09:16]** batch_2 [22/33] FAILED pipeline 7661649389630360868: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 05:10:08]** batch_2 [23/33] FAILED pipeline 7661240368716909887: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 05:11:01]** batch_2 [24/33] FAILED pipeline 7659908768234229034: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 05:11:49]** batch_2 [25/33] FAILED pipeline 7654550991211105576: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 05:18:26]** Overnight autonomous runner started (English Batches 1-4 -> live ElevenLabs check -> conditional Batch 4 Hindi).
+- **[2026-11-13 05:18:26]** batch_1 item 23/29 (7580584886294170906): active TTS engine set to `elevenlabs`.
+- **[2026-11-13 05:21:24]** Completed batch_1: 29 rendered & sorted in Drive, 0 duration-skipped, 0 failed.
+- **[2026-11-13 05:21:24]** batch_2 item 14/33 (7673048472945216774): active TTS engine set to `elevenlabs`.
+- **[2026-11-13 05:37:03]** batch_2 [31/33] FAILED pipeline 7467801821835267354: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 05:37:55]** batch_2 [32/33] FAILED pipeline 7467029510387436827: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 05:38:46]** batch_2 [33/33] FAILED pipeline 7460050084227599656: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 05:38:46]** Completed batch_2: 30 rendered & sorted in Drive, 0 duration-skipped, 3 failed.
+- **[2026-11-13 05:38:46]** batch_3 item 1/38 (7703767456715738383): active TTS engine set to `elevenlabs`.
+- **[2026-11-13 05:39:58]** batch_3 [1/38] FAILED pipeline 7703767456715738383: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 05:40:41]** batch_3 [2/38] FAILED download 7703408110462930195: Failed to fetch detail metadata for ID: 7703408110462930195
+- **[2026-11-13 05:42:11]** batch_3 [3/38] FAILED pipeline 7702358992898624777: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 05:42:37]** batch_3 [4/38] FAILED download 7702285251369100386: Failed to fetch detail metadata for ID: 7702285251369100386
+- **[2026-11-13 05:44:06]** batch_3 [5/38] FAILED pipeline 7700137803027336484: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 05:44:50]** batch_3 [6/38] FAILED pipeline 7700134095241661723: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 05:46:47]** batch_3 [7/38] FAILED pipeline 7699684580579708214: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 05:48:26]** batch_3 [8/38] FAILED pipeline 7696359760068660531: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 05:50:14]** batch_3 [9/38] FAILED pipeline 7693713892094781032: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 05:51:26]** batch_3 [10/38] FAILED pipeline 7693139739121899362: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 05:53:02]** batch_3 [11/38] FAILED pipeline 7692665739706109235: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 05:54:20]** batch_3 [12/38] FAILED pipeline 7692631558695570715: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 05:55:30]** batch_3 [13/38] FAILED pipeline 7692291389383511305: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 05:56:15]** batch_3 [14/38] FAILED pipeline 7692049248078056731: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 05:57:18]** batch_3 [15/38] FAILED pipeline 7690029371688246095: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 05:58:13]** batch_3 [16/38] FAILED pipeline 7689667253188985443: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 05:59:19]** batch_3 [17/38] FAILED pipeline 7689666106118774863: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 06:00:08]** batch_3 [18/38] FAILED pipeline 7688930970183708623: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 06:04:16]** Overnight autonomous runner started (English Batches 1-4 -> live ElevenLabs check -> conditional Batch 4 Hindi).
+- **[2026-11-13 06:04:16]** Completed batch_1: 29 rendered & sorted in Drive, 0 duration-skipped, 0 failed.
+- **[2026-11-13 06:04:16]** batch_2 item 17/33 (7667568748508859683): active TTS engine set to `elevenlabs`.
+- **[2026-11-13 06:08:59]** Completed batch_2: 33 rendered & sorted in Drive, 0 duration-skipped, 0 failed.
+- **[2026-11-13 06:08:59]** batch_3 item 1/38 (7703767456715738383): active TTS engine set to `google`.
+- **[2026-11-13 06:11:07]** batch_3 [2/38] FAILED download 7703408110462930195: Failed to fetch detail metadata for ID: 7703408110462930195
+- **[2026-11-13 06:13:15]** batch_3 [4/38] FAILED download 7702285251369100386: Failed to fetch detail metadata for ID: 7702285251369100386
+- **[2026-11-13 06:20:17]** batch_3 [7/38] FAILED pipeline 7699684580579708214: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 06:20:17]** batch_3 item 8/38 (7696359760068660531): active TTS engine set to `elevenlabs`.
+- **[2026-11-13 06:28:14]** batch_3 [9/38] FAILED pipeline 7693713892094781032: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 06:29:17]** batch_3 [10/38] FAILED pipeline 7693139739121899362: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 06:47:31]** batch_3 [15/38] FAILED pipeline 7690029371688246095: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 06:48:43]** batch_3 [16/38] FAILED pipeline 7689667253188985443: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 06:50:16]** batch_3 [17/38] FAILED pipeline 7689666106118774863: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 06:51:41]** batch_3 [18/38] FAILED pipeline 7688930970183708623: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:02:27]** batch_3 [22/38] FAILED pipeline 7686688800656243171: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:03:31]** batch_3 [23/38] FAILED pipeline 7683492820372288163: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:04:45]** batch_3 [24/38] FAILED pipeline 7681885306203972736: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:05:48]** batch_3 [25/38] FAILED pipeline 7681525798243242466: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:06:54]** batch_3 [26/38] FAILED pipeline 7656381434956893491: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:08:03]** batch_3 [27/38] FAILED pipeline 7574358359793470747: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:09:07]** batch_3 [28/38] FAILED pipeline 7565501992445988132: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:10:14]** batch_3 [29/38] FAILED pipeline 7562118863102545192: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:11:17]** batch_3 [30/38] FAILED pipeline 7558757776005106963: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:12:50]** batch_3 [31/38] FAILED pipeline 7558009917358050595: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:12:50]** Storage Guard triggered (low space). Cleaned temp artifacts (0.0 MB). Free C: = 1.79 GB. Emergency root-output cleanup freed 237.7 MB -> Free C: = 2.02 GB.
+- **[2026-11-13 07:14:25]** batch_3 [32/38] FAILED pipeline 7557629824366431503: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:15:36]** batch_3 [33/38] FAILED pipeline 7557293065363410191: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:16:48]** batch_3 [34/38] FAILED pipeline 7557007734948875560: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:17:57]** batch_3 [35/38] FAILED pipeline 7556933271393684776: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:18:56]** batch_3 [36/38] FAILED pipeline 7556155622258019625: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:20:06]** batch_3 [37/38] FAILED pipeline 7555508609401048363: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:21:15]** batch_3 [38/38] FAILED pipeline 7548779115441065243: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:21:15]** Completed batch_3: 12 rendered & sorted in Drive, 0 duration-skipped, 26 failed.
+- **[2026-11-13 07:21:15]** batch_4 item 1/35 (7700949659867287680): active TTS engine set to `elevenlabs`.
+- **[2026-11-13 07:22:46]** batch_4 [1/35] FAILED pipeline 7700949659867287680: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:22:46]** batch_4 [2/35] SKIPPED (prefetch probe) 7686461113689538959: duration 188.0s > 180s.
+- **[2026-11-13 07:22:54]** batch_4 [3/35] SKIPPED (pre-download probe) 7683377800636654912: duration 284.0s > 180s.
+- **[2026-11-13 07:24:55]** batch_4 [4/35] FAILED pipeline 7676419244507233448: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:26:03]** batch_4 [5/35] FAILED pipeline 7675663324675098722: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:27:09]** batch_4 [6/35] FAILED pipeline 7639279024359516294: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:27:52]** batch_4 [7/35] FAILED pipeline 7635958636409736874: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:28:36]** batch_4 [8/35] FAILED pipeline 7609896963744040518: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:29:15]** batch_4 [9/35] FAILED pipeline 7602489816723219190: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:30:04]** batch_4 [10/35] FAILED pipeline 7549054694031707433: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:30:45]** batch_4 [11/35] FAILED pipeline 7326476829580217610: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:30:45]** batch_4 [12/35] SKIPPED (prefetch probe) 7295704044557913395: duration 509.0s > 180s.
+- **[2026-11-13 07:31:02]** batch_4 [13/35] SKIPPED (pre-download probe) 7217405407197744445: duration 403.0s > 180s.
+- **[2026-11-13 07:31:26]** batch_4 [14/35] SKIPPED (pre-download probe) 7204041576731987203: duration 3172.0s > 180s.
+- **[2026-11-13 07:31:38]** batch_4 [15/35] SKIPPED (pre-download probe) 7195506002291117368: duration 264.0s > 180s.
+- **[2026-11-13 07:32:04]** batch_4 [16/35] SKIPPED (pre-download probe) 7167698475075865864: duration 200.0s > 180s.
+- **[2026-11-13 07:32:28]** batch_4 [17/35] SKIPPED (pre-download probe) 7082662747804044577: duration 218.0s > 180s.
+- **[2026-11-13 07:33:57]** batch_4 [18/35] FAILED pipeline 7037750889993604383: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:34:45]** batch_4 [19/35] FAILED pipeline 6992150966510439683: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:35:33]** batch_4 [20/35] FAILED pipeline 6917535612803370254: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:36:39]** batch_4 [21/35] FAILED pipeline 6890468791952674063: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:37:39]** batch_4 [22/35] FAILED pipeline 6883782738768350475: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:38:26]** batch_4 [23/35] FAILED pipeline 6868556189324610820: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:39:25]** batch_4 [24/35] FAILED pipeline 6867432469684129024: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:40:17]** batch_4 [25/35] FAILED pipeline 6860758867635162368: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:40:56]** batch_4 [26/35] FAILED pipeline 6832952221571796239: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:41:49]** batch_4 [27/35] FAILED pipeline 6816995082021965056: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:42:51]** batch_4 [28/35] FAILED pipeline 6815098979001421067: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:43:36]** batch_4 [29/35] FAILED pipeline 6813296182987738383: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:44:08]** batch_4 [30/35] FAILED pipeline 6791761994581069056: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:44:46]** batch_4 [31/35] FAILED pipeline 6785470335933320463: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:45:39]** batch_4 [32/35] FAILED pipeline 6779883649924893967: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:46:11]** batch_4 [33/35] FAILED pipeline 6766538332257209604: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:46:51]** batch_4 [34/35] FAILED pipeline 6765041952938380547: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:47:38]** batch_4 [35/35] FAILED pipeline 6755765674292841732: All Gemini API keys in the runtime pool were exhausted.
+- **[2026-11-13 07:47:38]** Completed batch_4: 0 rendered & sorted in Drive, 8 duration-skipped, 27 failed.
+- **[2026-11-13 07:47:45]** Post-English ElevenLabs quota check: 7 working keys, 17739 remaining characters.
+- **[2026-11-13 07:47:45]** Starting conditional `batch_4_hindi` (ElevenLabs only, 17739 chars available).
+- **[2026-11-13 07:47:45]** batch_4_hindi item 1/35 (7700949659867287680): active TTS engine set to `elevenlabs`.
+- **[2026-11-13 07:48:31]** batch_4_hindi: ElevenLabs exhausted mid-video 7700949659867287680; stopping batch_4_hindi cleanly.
+- **[2026-11-13 07:48:31]** All overnight batches finished cleanly!
+- **[2026-11-13 07:49:13]** Overnight autonomous runner started (English Batches 1-4 -> live ElevenLabs check -> conditional Batch 4 Hindi).
+- **[2026-11-13 07:49:14]** Completed batch_1: 29 rendered & sorted in Drive, 0 duration-skipped, 0 failed.
+- **[2026-11-13 07:49:14]** Completed batch_2: 33 rendered & sorted in Drive, 0 duration-skipped, 0 failed.
+- **[2026-11-13 07:49:14]** batch_3 item 2/38 (7703408110462930195): active TTS engine set to `google`.
+- **[2026-11-13 07:50:19]** batch_3 [2/38] FAILED download 7703408110462930195: Failed to fetch detail metadata for ID: 7703408110462930195
+- **[2026-11-13 07:51:35]** batch_3 [4/38] FAILED download 7702285251369100386: Failed to fetch detail metadata for ID: 7702285251369100386
+- **[2026-11-13 08:06:44]** batch_3 [22/38] FAILED pipeline 7686688800656243171: [Errno 2] No such file or directory: 'No subtitle blocks were provided in your message (the count is 0 and the list after the prompt is empty). Please include the timestamped SRT blocks so I can transcreate them into the voiceover script.'
+- **[2026-11-13 08:15:07]** batch_3 item 29/38 (7562118863102545192): active TTS engine set to `elevenlabs`.
+- **[2026-11-13 08:26:53]** Completed batch_3: 35 rendered & sorted in Drive, 0 duration-skipped, 3 failed.
+- **[2026-11-13 08:26:53]** batch_4 item 1/35 (7700949659867287680): active TTS engine set to `elevenlabs`.
+- **[2026-11-13 08:51:16]** Storage Guard triggered (low space). Cleaned temp artifacts (0.0 MB). Free C: = 2.75 GB.
+- **[2026-11-13 08:56:02]** batch_4 [30/35] FAILED pipeline 6791761994581069056: All Gemini API keys in the runtime pool were exhausted.

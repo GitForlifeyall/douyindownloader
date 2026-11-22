@@ -1,0 +1,848 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Account Studio • Native Creator Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+  <style>
+    body { background-color: #0b0f19; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.08); }
+    .glass-input { background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(255, 255, 255, 0.12); }
+    .glass-input:focus { border-color: #3b82f6; outline: none; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25); }
+    .terminal-scroll::-webkit-scrollbar { width: 6px; }
+    .terminal-scroll::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+  </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden select-none">
+
+  <!-- Top App Navigation Bar -->
+  <header class="h-14 border-b border-slate-800 bg-slate-900/90 flex items-center justify-between px-6 z-10">
+    <div class="flex items-center space-x-3">
+      <div class="w-8 h-8 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center shadow-lg shadow-blue-500/20">
+        <i class="fa-solid fa-bolt text-white text-sm"></i>
+      </div>
+      <div>
+        <h1 class="text-sm font-bold tracking-wide text-slate-100 flex items-center space-x-2">
+          <span>ACCOUNT STUDIO</span>
+          <span class="text-[10px] bg-blue-500/20 text-blue-400 font-semibold px-2 py-0.5 rounded-full border border-blue-500/30">NATIVE</span>
+        </h1>
+        <p class="text-[11px] text-slate-400">Instagram • Facebook • Metricool Automated Creator</p>
+      </div>
+    </div>
+
+    <!-- Live Status Indicators -->
+    <div class="flex items-center space-x-4 text-xs">
+      <div id="proxyBadge" class="flex items-center space-x-2 px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-slate-400">
+        <span class="w-2 h-2 rounded-full bg-slate-500" id="proxyDot"></span>
+        <span id="proxyText">Proxy: Not Tested</span>
+      </div>
+
+      <div id="oauthBadge" class="flex items-center space-x-2 px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-slate-400">
+        <span class="w-2 h-2 rounded-full bg-slate-500" id="oauthDot"></span>
+        <span id="oauthText">Outlook: Not Tested</span>
+      </div>
+
+      <div id="taskBadge" class="flex items-center space-x-2 px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-slate-300">
+        <span class="w-2 h-2 rounded-full bg-emerald-500" id="taskDot"></span>
+        <span id="taskStatusText">Status: Ready</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Workspace -->
+  <div class="flex-1 flex overflow-hidden">
+    
+    <!-- Left Configuration Panel -->
+    <div class="w-[480px] border-r border-slate-800/80 p-5 overflow-y-auto space-y-5 bg-slate-950/40">
+      
+      <!-- 1. Account Credentials Card -->
+      <div class="glass rounded-xl p-4 space-y-3">
+        <div class="flex items-center justify-between">
+          <label class="text-xs font-semibold text-slate-300 flex items-center space-x-2">
+            <i class="fa-solid fa-envelope text-blue-400"></i>
+            <span>Outlook / Hotmail Credentials</span>
+          </label>
+          <div class="flex items-center space-x-1.5">
+            <button onclick="saveCurrentAsIdentity()" class="text-[11px] px-2 py-1 bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 border border-amber-500/30 rounded-md transition flex items-center space-x-1" title="Save this email & proxy as a unified identity">
+              <i class="fa-solid fa-id-card"></i>
+              <span>Save Identity</span>
+            </button>
+            <button onclick="checkEmailInSupabase()" class="text-[11px] px-2 py-1 bg-teal-600/20 hover:bg-teal-600/30 text-teal-300 border border-teal-500/30 rounded-md transition flex items-center space-x-1" title="Check if this email is already registered in Supabase">
+              <i class="fa-solid fa-database"></i>
+              <span>Check DB</span>
+            </button>
+            <button onclick="testOAuth()" class="text-[11px] px-2 py-1 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 border border-blue-500/30 rounded-md transition flex items-center space-x-1">
+              <i class="fa-solid fa-vial"></i>
+              <span>Test Mailbox</span>
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <label class="text-[11px] text-slate-400 block mb-1">Quick-Paste Account String (email|password|refresh_token|client_id):</label>
+          <textarea id="rawAccount" rows="2" placeholder="email|pass|refreshToken|clientId" oninput="parseAccountInput()" 
+            class="w-full glass-input text-xs text-slate-200 p-2.5 rounded-lg font-mono resize-none focus:ring-1 focus:ring-blue-500">AuLumb3394@outlook.com|dlfsznt6597|M.C537_SN1.0.U.MsaArtifacts.-CoqUbMi5MaM6LhmwsGRPSGcmu*24lfZRS9oo3m28eVwsZnbBEny6!jlBk6Ccdt!Mm90J7qJqxjZqiYrpFnyOL20FKALur1REvd8bDENSBFtWbJ7KHJh6f3kzCkpy8K9ilXkd7I9n*2iNkj7MTLnTxxd7trV!XmAbjwtIt!3Mp1oW*3C5lEqv0IWwxp*CvfM7aZz77KgtbengvgitepAnomwfpN1r6FThpeELEP!xi3AaRwnNBkJRe3YygfGEzmZcuJlGIAuEl9Ocb!eQiSSK9uAO2lHJdqeQ4dQgFP7C3wKKhx2s9Bh00Kx5ky9lT6pbo*gtp4lsi6jNr*XZHKgYRH65fv!oOM676t0v7faeMugGdi57yYU49p93otH60ED2d5cxDEpsQHo5Fbk4!VNqVSgzCCKjvmCnFbFl5G7aZWxM2aNRghAktcQHrajmIFphaQ$$|9e5f94bc-e8a4-4e73-b8be-63364c29d753</textarea>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2 text-xs">
+          <div>
+            <label class="text-[10px] text-slate-400">Target Email</label>
+            <input type="text" id="targetEmail" class="w-full glass-input p-2 rounded text-slate-200 font-mono text-xs" readonly>
+          </div>
+          <div>
+            <label class="text-[10px] text-slate-400">Target Password</label>
+            <input type="password" id="targetPassword" class="w-full glass-input p-2 rounded text-slate-200 font-mono text-xs" readonly>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. Oxylabs Proxy Card -->
+      <div class="glass rounded-xl p-4 space-y-3">
+        <div class="flex items-center justify-between">
+          <label class="text-xs font-semibold text-slate-300 flex items-center space-x-2">
+            <i class="fa-solid fa-shield-halved text-emerald-400"></i>
+            <span>Proxy Configuration</span>
+          </label>
+          <button onclick="testProxy()" class="text-[11px] px-2.5 py-1 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 rounded-md transition flex items-center space-x-1">
+            <i class="fa-solid fa-network-wired"></i>
+            <span>Check Proxy</span>
+          </button>
+        </div>
+
+        <div>
+          <label class="text-[11px] text-slate-400 block mb-1">Oxylabs Proxy (user:pass@host:port or Web Unblocker):</label>
+          <input type="text" id="proxyInput" value="customer-resi_66c2a9b7-cc-in-city-ahmedabad:oMw6GpW~=ghV@pr.oxylabs.io:7777"
+            class="w-full glass-input text-xs text-slate-200 p-2.5 rounded-lg font-mono">
+        </div>
+
+        <div id="proxyResultCard" class="hidden text-[11px] p-2.5 rounded-lg bg-slate-900 border border-slate-800 space-y-1">
+          <div class="flex justify-between text-slate-400">
+            <span>Exit IP: <strong id="resIp" class="text-slate-200">-</strong></span>
+            <span>Latency: <strong id="resLatency" class="text-emerald-400">-</strong></span>
+          </div>
+          <div class="flex justify-between text-slate-400">
+            <span>Country: <strong id="resCountry" class="text-slate-200">-</strong></span>
+            <span>ISP: <strong id="resIsp" class="text-slate-200">-</strong></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2.5 Supabase Real-Time Cloud DB Card -->
+      <div class="glass rounded-xl p-4 space-y-3">
+        <div class="flex items-center justify-between">
+          <label class="text-xs font-semibold text-slate-300 flex items-center space-x-2">
+            <i class="fa-solid fa-database text-teal-400"></i>
+            <span>Supabase Cloud Database</span>
+          </label>
+          <span id="supabaseStatusBadge" class="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-400 font-medium">Not Configured</span>
+        </div>
+
+        <div class="space-y-2">
+          <div>
+            <label class="text-[11px] text-slate-400 block mb-1">Supabase Project URL:</label>
+            <input type="text" id="supabaseUrlInput" placeholder="https://xyzabcdefg.supabase.co"
+              class="w-full glass-input text-xs text-slate-200 p-2 rounded-lg font-mono">
+          </div>
+          <div>
+            <label class="text-[11px] text-slate-400 block mb-1">Supabase API Key (service_role or anon):</label>
+            <input type="password" id="supabaseKeyInput" placeholder="eyJhbGciOi..."
+              class="w-full glass-input text-xs text-slate-200 p-2 rounded-lg font-mono">
+          </div>
+        </div>
+
+        <div class="flex items-center justify-between pt-1">
+          <span class="text-[11px] text-slate-500">Auto-upserts accounts, 2FA & proxies into PostgreSQL</span>
+          <div class="flex space-x-2">
+            <button onclick="saveSupabaseConfig()" class="text-[11px] px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-md transition">
+              Save DB
+            </button>
+            <button onclick="testSupabase()" class="text-[11px] px-3 py-1 bg-teal-600/20 hover:bg-teal-600/30 text-teal-400 border border-teal-500/30 rounded-md transition flex items-center space-x-1">
+              <i class="fa-solid fa-bolt"></i>
+              <span>Test DB</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3. Launch Controls & Action Triggers -->
+      <div class="glass rounded-xl p-4 space-y-3">
+        <div class="flex items-center justify-between">
+          <label class="text-xs font-semibold text-slate-300 flex items-center space-x-2">
+            <i class="fa-solid fa-play text-indigo-400"></i>
+            <span>Launch Pipeline</span>
+          </label>
+          <label class="flex items-center space-x-2 cursor-pointer text-xs text-slate-400">
+            <input type="checkbox" id="headlessToggle" class="rounded bg-slate-800 border-slate-700 text-blue-500 focus:ring-0">
+            <span>Headless (Background)</span>
+          </label>
+        </div>
+
+        <div class="grid grid-cols-3 gap-2 pt-1">
+          <button onclick="startTask('instagram')" class="p-3 rounded-lg bg-gradient-to-b from-purple-600/30 to-pink-600/20 hover:from-purple-600/40 hover:to-pink-600/30 border border-purple-500/30 text-white font-medium text-xs flex flex-col items-center space-y-1.5 transition">
+            <i class="fa-brands fa-instagram text-base text-pink-400"></i>
+            <span>Instagram</span>
+          </button>
+
+          <button onclick="startTask('facebook')" class="p-3 rounded-lg bg-gradient-to-b from-blue-600/30 to-indigo-600/20 hover:from-blue-600/40 hover:to-indigo-600/30 border border-blue-500/30 text-white font-medium text-xs flex flex-col items-center space-y-1.5 transition">
+            <i class="fa-brands fa-facebook text-base text-blue-400"></i>
+            <span>Facebook</span>
+          </button>
+
+          <button onclick="startTask('metricool')" class="p-3 rounded-lg bg-gradient-to-b from-teal-600/30 to-emerald-600/20 hover:from-teal-600/40 hover:to-emerald-600/30 border border-teal-500/30 text-white font-medium text-xs flex flex-col items-center space-y-1.5 transition">
+            <i class="fa-solid fa-chart-line text-base text-teal-400"></i>
+            <span>Metricool</span>
+          </button>
+        </div>
+
+        <button onclick="stopTask()" class="w-full py-2.5 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 border border-red-500/30 text-xs font-semibold flex items-center justify-center space-x-2 transition">
+          <i class="fa-solid fa-stop"></i>
+          <span>Stop Process & Clear Locks</span>
+        </button>
+      </div>
+
+      <!-- 4. Registered Accounts Summary -->
+      <div class="glass rounded-xl p-4 space-y-2">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-semibold text-slate-300">Registered Accounts Master</span>
+          <button onclick="loadAccounts()" class="text-[11px] text-slate-400 hover:text-white transition">
+            <i class="fa-solid fa-rotate-right"></i> Refresh
+          </button>
+        </div>
+        <div id="accountsSummary" class="text-xs text-slate-400 space-y-1 pt-1">
+          Loading accounts...
+        </div>
+      </div>
+
+      <!-- 5. Identities (one profile + one proxy shared by all platforms) -->
+      <div class="glass rounded-xl p-4 space-y-3">
+        <div class="flex items-center justify-between">
+          <label class="text-xs font-semibold text-slate-300 flex items-center space-x-2">
+            <i class="fa-solid fa-fingerprint text-amber-400"></i>
+            <span>Identities</span>
+          </label>
+          <div class="flex items-center space-x-2">
+            <button onclick="toggleNewIdentity()" class="text-[11px] px-2 py-0.5 bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 border border-amber-500/30 rounded transition">
+              <i class="fa-solid fa-plus"></i> New
+            </button>
+            <button onclick="loadIdentities()" class="text-[11px] text-slate-400 hover:text-white transition">
+              <i class="fa-solid fa-rotate-right"></i>
+            </button>
+          </div>
+        </div>
+
+        <div id="newIdentityForm" class="hidden space-y-2 border border-slate-800 rounded-lg p-2.5 bg-slate-900/50">
+          <div class="flex items-center justify-between text-[10px] text-slate-400">
+            <span>Register New Identity</span>
+            <button type="button" onclick="fillNewIdentityFromMain()" class="text-amber-400 hover:underline">Copy from Above Inputs</button>
+          </div>
+          <div>
+            <label class="text-[10px] text-slate-400 block mb-0.5">Account String or Email:</label>
+            <textarea id="newIdentityAccount" rows="2" placeholder="email|password|refresh_token|client_id"
+              class="w-full glass-input text-[11px] text-slate-200 p-2 rounded font-mono resize-none"></textarea>
+          </div>
+          <div>
+            <label class="text-[10px] text-slate-400 block mb-0.5">Proxy (optional, defaults to above):</label>
+            <input id="newIdentityProxy" placeholder="user:pass@pr.oxylabs.io:7777"
+              class="w-full glass-input text-[11px] text-slate-200 p-2 rounded font-mono">
+          </div>
+          <button onclick="createIdentity()" class="w-full py-1.5 rounded bg-amber-600/25 hover:bg-amber-600/35 text-amber-200 border border-amber-500/30 text-[11px] font-semibold">
+            Create Identity
+          </button>
+        </div>
+
+        <div id="identityList" class="space-y-2 text-[11px]">
+          <div class="text-slate-500">Loading identities...</div>
+        </div>
+        <div class="text-[10px] text-slate-500 leading-relaxed">
+          One profile, one proxy, all three platforms. Every run passes the proxy gate first.
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Console & Live Screen View -->
+    <div class="flex-1 flex flex-col bg-slate-950 p-5 space-y-4 overflow-hidden">
+      
+      <!-- Live Screenshot Ticker Bar -->
+      <div class="glass rounded-xl p-3 flex items-center justify-between">
+        <div class="flex items-center space-x-2 text-xs text-slate-300 font-medium">
+          <i class="fa-solid fa-camera text-blue-400"></i>
+          <span>Live Visual Stream (Screenshot Ticker)</span>
+        </div>
+        <div class="text-[11px] text-slate-500" id="liveTickerStatus">Auto-updating every 5s</div>
+      </div>
+
+      <!-- Screenshot Preview Window -->
+      <div class="h-44 glass rounded-xl overflow-hidden flex items-center justify-center bg-black/40 border border-slate-800/80 relative">
+        <img id="liveScreenshot" src="/api/latest-screenshot" class="h-full object-contain" onerror="this.style.display='none'" onload="this.style.display='block'">
+        <div id="noScreenshotNotice" class="text-xs text-slate-600 flex items-center space-x-2">
+          <i class="fa-regular fa-image text-lg"></i>
+          <span>Awaiting first screenshot from active browser session...</span>
+        </div>
+      </div>
+
+      <!-- Interactive Streaming Terminal -->
+      <div class="flex-1 glass rounded-xl flex flex-col overflow-hidden">
+        <div class="h-9 border-b border-slate-800/80 px-4 flex items-center justify-between text-xs text-slate-400 bg-slate-900/40">
+          <div class="flex items-center space-x-2 font-mono text-[11px]">
+            <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block"></span>
+            <span>TERMINAL LOG STREAM</span>
+          </div>
+          <button onclick="clearTerminal()" class="hover:text-slate-200 transition text-[11px] flex items-center space-x-1">
+            <i class="fa-solid fa-trash-can"></i>
+            <span>Clear</span>
+          </button>
+        </div>
+
+        <div id="terminal" class="flex-1 p-4 font-mono text-xs text-slate-300 overflow-y-auto terminal-scroll space-y-1 bg-black/60">
+          <div class="text-blue-400">[SYSTEM] Account Studio Native Dashboard initialized.</div>
+          <div class="text-slate-500">[READY] Select a platform to launch automated account creation with anti-detect isolation.</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+    const term = document.getElementById("terminal");
+    const rawAcc = document.getElementById("rawAccount");
+    const targetEmail = document.getElementById("targetEmail");
+    const targetPassword = document.getElementById("targetPassword");
+
+    function parseAccountInput() {
+      const parts = rawAcc.value.trim().split("|");
+      if (parts.length >= 2) {
+        targetEmail.value = parts[0].trim();
+        targetPassword.value = parts[1].trim();
+      }
+    }
+    parseAccountInput();
+
+    function appendLog(msg, colorClass = "text-slate-300") {
+      const el = document.createElement("div");
+      el.className = colorClass;
+      el.textContent = msg;
+      term.appendChild(el);
+      term.scrollTop = term.scrollHeight;
+    }
+
+    function clearTerminal() {
+      term.innerHTML = '<div class="text-slate-500">[CONSOLE CLEARED]</div>';
+    }
+
+    // Connect WebSocket for streaming logs
+    let ws;
+    function connectWS() {
+      const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+      ws = new WebSocket(`${protocol}//${location.host}/ws/logs`);
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === "log") {
+            appendLog(data.message);
+          } else if (data.type === "status") {
+            setTaskRunning(data.is_running);
+            if (!data.is_running) {
+              if (typeof loadIdentities === "function") loadIdentities();
+              if (typeof loadAccounts === "function") loadAccounts();
+            }
+          }
+        } catch(e) {
+          appendLog(event.data);
+        }
+      };
+      ws.onclose = () => setTimeout(connectWS, 2000);
+    }
+    connectWS();
+
+    function setTaskRunning(running, name = "") {
+      const badge = document.getElementById("taskBadge");
+      const dot = document.getElementById("taskDot");
+      const text = document.getElementById("taskStatusText");
+
+      if (running) {
+        dot.className = "w-2 h-2 rounded-full bg-amber-400 animate-pulse";
+        text.textContent = `Running: ${name || 'Active'}`;
+        badge.className = "flex items-center space-x-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-300";
+      } else {
+        dot.className = "w-2 h-2 rounded-full bg-emerald-500";
+        text.textContent = "Status: Ready";
+        badge.className = "flex items-center space-x-2 px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-slate-300";
+      }
+    }
+
+    async function testProxy() {
+      const proxy = document.getElementById("proxyInput").value.trim();
+      const dot = document.getElementById("proxyDot");
+      const text = document.getElementById("proxyText");
+      const badge = document.getElementById("proxyBadge");
+      const resultCard = document.getElementById("proxyResultCard");
+
+      appendLog(`[TEST] Testing proxy connectivity: ${proxy.split('@')[1] || proxy}...`, "text-blue-400");
+      text.textContent = "Testing...";
+      dot.className = "w-2 h-2 rounded-full bg-amber-400 animate-pulse";
+
+      try {
+        const res = await fetch("/api/test-proxy", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ proxy })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          dot.className = "w-2 h-2 rounded-full bg-emerald-500";
+          text.textContent = `Proxy: ${data.latency_ms}ms (${data.country})`;
+          badge.className = "flex items-center space-x-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400";
+          
+          resultCard.classList.remove("hidden");
+          document.getElementById("resIp").textContent = data.ip;
+          document.getElementById("resLatency").textContent = `${data.latency_ms}ms`;
+          document.getElementById("resCountry").textContent = data.country;
+          document.getElementById("resIsp").textContent = data.isp;
+
+          appendLog(`[PROXY OK] IP: ${data.ip} | Country: ${data.country} | ISP: ${data.isp} (${data.latency_ms}ms)`, "text-emerald-400");
+        } else {
+          dot.className = "w-2 h-2 rounded-full bg-red-500";
+          text.textContent = "Proxy: Error";
+          badge.className = "flex items-center space-x-2 px-3 py-1 rounded-full bg-red-500/10 border border-red-500/30 text-red-400";
+          appendLog(`[PROXY ERROR] ${data.error}`, "text-red-400");
+        }
+      } catch (err) {
+        dot.className = "w-2 h-2 rounded-full bg-red-500";
+        text.textContent = "Proxy: Failed";
+        appendLog(`[PROXY FAIL] ${err.message}`, "text-red-400");
+      }
+    }
+
+    async function testOAuth() {
+      const parts = rawAcc.value.trim().split("|");
+      const rToken = parts[2] ? parts[2].trim() : "";
+      const cId = parts[3] ? parts[3].trim() : "9e5f94bc-e8a4-4e73-b8be-63364c29d753";
+
+      const dot = document.getElementById("oauthDot");
+      const text = document.getElementById("oauthText");
+      const badge = document.getElementById("oauthBadge");
+
+      appendLog(`[TEST] Exchanging Microsoft OAuth token for ${targetEmail.value}...`, "text-blue-400");
+      text.textContent = "Testing Mailbox...";
+      dot.className = "w-2 h-2 rounded-full bg-amber-400 animate-pulse";
+
+      try {
+        const res = await fetch("/api/test-oauth", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ client_id: cId, refresh_token: rToken })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          dot.className = "w-2 h-2 rounded-full bg-emerald-500";
+          text.textContent = `Outlook: Connected (${data.inbox_count} msgs)`;
+          badge.className = "flex items-center space-x-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400";
+          appendLog(`[OAUTH OK] Successfully connected to Outlook inbox! Recent message count: ${data.inbox_count}`, "text-emerald-400");
+          if (data.recent_subjects) {
+            data.recent_subjects.forEach(s => appendLog(`   • Subject: ${s}`, "text-slate-400"));
+          }
+        } else {
+          dot.className = "w-2 h-2 rounded-full bg-red-500";
+          text.textContent = "Outlook: Failed";
+          badge.className = "flex items-center space-x-2 px-3 py-1 rounded-full bg-red-500/10 border border-red-500/30 text-red-400";
+          appendLog(`[OAUTH ERROR] ${data.error}`, "text-red-400");
+        }
+      } catch (err) {
+        dot.className = "w-2 h-2 rounded-full bg-red-500";
+        text.textContent = "Outlook: Error";
+        appendLog(`[OAUTH FAIL] ${err.message}`, "text-red-400");
+      }
+    }
+
+    async function checkEmailInSupabase() {
+      const account = rawAcc.value.trim();
+      const email = (account.split("|")[0] || "").trim();
+      if (!email) {
+        appendLog("[SUPABASE] Please enter or paste an email first.", "text-amber-400");
+        return;
+      }
+      appendLog(`[SUPABASE] Checking if ${email} already exists in Supabase email_accounts...`, "text-teal-400");
+      try {
+        const res = await fetch(`/api/supabase/check-email?email=${encodeURIComponent(email)}`);
+        const data = await res.json();
+        if (data.table_missing) {
+          appendLog(`[SUPABASE NOTICE] Table 'email_accounts' not created yet. Please execute tools/supabase_schema.sql in your Supabase SQL Editor.`, "text-amber-400");
+          return;
+        }
+        if (data.exists) {
+          const rec = data.record || {};
+          const platforms = (rec.used_in_platforms || []).join(", ") || rec.last_used_platform || "none";
+          appendLog(`[EXISTS IN SUPABASE] Email ${email} already exists! Used in: [${platforms}] | Status: ${rec.status || 'ACTIVE'}`, "text-amber-300");
+        } else {
+          appendLog(`[AVAILABLE IN SUPABASE] Email ${email} is fresh and NOT registered yet. Safe to use!`, "text-emerald-400");
+        }
+      } catch (err) {
+        appendLog(`[SUPABASE ERROR] ${err.message}`, "text-red-400");
+      }
+    }
+
+    async function startTask(platform) {
+      const account = rawAcc.value.trim();
+      const proxy = document.getElementById("proxyInput").value.trim();
+      const headless = document.getElementById("headlessToggle").checked;
+
+      appendLog(`[LAUNCH] Dispatching ${platform.toUpperCase()} registration...`, "text-indigo-400");
+      setTaskRunning(true, platform.toUpperCase());
+
+      try {
+        const res = await fetch("/api/start-task", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ platform, account, proxy, headless })
+        });
+        const data = await res.json();
+        if (!data.ok) {
+          appendLog(`[ERROR] ${data.detail || data.message}`, "text-red-400");
+          setTaskRunning(false);
+        }
+      } catch(err) {
+        appendLog(`[ERROR] ${err.message}`, "text-red-400");
+        setTaskRunning(false);
+      }
+    }
+
+    async function stopTask() {
+      appendLog("[STOP] Terminating active processes...", "text-amber-400");
+      try {
+        const res = await fetch("/api/stop-task", { method: "POST" });
+        const data = await res.json();
+        appendLog(`[STOP] ${data.message}`, "text-slate-300");
+        setTaskRunning(false);
+      } catch(err) {
+        appendLog(`[STOP ERROR] ${err.message}`, "text-red-400");
+      }
+    }
+
+    async function loadAccounts() {
+      const summaryDiv = document.getElementById("accountsSummary");
+      try {
+        const res = await fetch("/api/accounts");
+        const data = await res.json();
+        const igCount = (data.instagram || []).length;
+        const fbCount = (data.facebook || []).length;
+        const mcCount = (data.metricool || []).length;
+
+        summaryDiv.innerHTML = `
+          <div class="flex justify-between items-center py-1 border-b border-slate-800">
+            <span><i class="fa-brands fa-instagram text-pink-400 mr-1.5"></i> Instagram Accounts:</span>
+            <strong class="text-slate-200">${igCount}</strong>
+          </div>
+          <div class="flex justify-between items-center py-1 border-b border-slate-800">
+            <span><i class="fa-brands fa-facebook text-blue-400 mr-1.5"></i> Facebook Accounts:</span>
+            <strong class="text-slate-200">${fbCount}</strong>
+          </div>
+          <div class="flex justify-between items-center py-1 border-b border-slate-800">
+            <span><i class="fa-solid fa-chart-line text-teal-400 mr-1.5"></i> Metricool Accounts:</span>
+            <strong class="text-slate-200">${mcCount}</strong>
+          </div>
+          <div class="flex justify-between items-center py-1">
+            <span><i class="fa-solid fa-database text-teal-300 mr-1.5"></i> Supabase Cloud Total:</span>
+            <strong class="text-teal-400">${data.supabase_total !== null && data.supabase_total !== undefined ? data.supabase_total : 'Syncing...'}</strong>
+          </div>
+        `;
+      } catch(e) {
+        summaryDiv.innerHTML = "<span class='text-red-400'>Failed to load accounts.</span>";
+      }
+    }
+    loadAccounts();
+
+    // =========================================================================
+    // Identities: one profile + one proxy shared by Metricool / Facebook / Instagram
+    // =========================================================================
+    function toggleNewIdentity() {
+      document.getElementById("newIdentityForm").classList.toggle("hidden");
+    }
+
+    function statusChip(status) {
+      const map = {
+        ok: ["bg-emerald-500/15 text-emerald-400 border-emerald-500/30", "OK"],
+        suspended: ["bg-red-500/15 text-red-400 border-red-500/30", "SUSP"],
+        failed: ["bg-amber-500/15 text-amber-400 border-amber-500/30", "FAIL"],
+        aborted: ["bg-slate-500/15 text-slate-400 border-slate-500/30", "ABRT"],
+        running: ["bg-blue-500/15 text-blue-400 border-blue-500/30", "RUN"],
+        none: ["bg-slate-800 text-slate-500 border-slate-700", "\u2014"]
+      };
+      const picked = map[status] || map.none;
+      return `<span class="px-1.5 py-0.5 rounded border ${picked[0]} font-mono text-[10px]">${picked[1]}</span>`;
+    }
+
+    async function loadIdentities() {
+      const list = document.getElementById("identityList");
+      try {
+        const res = await fetch("/api/identities");
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || "load failed");
+        const ids = data.identities || [];
+        if (!ids.length) {
+          list.innerHTML = "<div class='text-slate-500'>No identities yet. Click New and paste a mailbox.</div>";
+          return;
+        }
+        const stateCls = {
+          complete: "text-emerald-400", active: "text-blue-400", failed: "text-red-400",
+          discarded: "text-slate-500", running: "text-blue-300", new: "text-slate-300"
+        };
+        list.innerHTML = ids.map((rec) => {
+          const p = rec.platforms || {};
+          const state = rec.state || "new";
+          const proxyLine = rec.proxy_ip
+            ? `${rec.proxy_ip} \u00b7 ${rec.proxy_country || "?"}`
+            : (rec.proxy ? "unverified" : "no proxy");
+          const warn = rec.proxy_verified_at ? "" : " \u26a0";
+          const id = rec.identity_id;
+          return `
+          <div class="border border-slate-800 rounded-lg p-2 space-y-1.5 bg-slate-900/40">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center space-x-1.5 truncate">
+                <span class="font-mono text-slate-200 truncate font-semibold" title="${rec.email}">${rec.email}</span>
+                <button onclick="loadIdentityIntoForm('${id}')" class="text-blue-400 hover:text-blue-300 text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 transition" title="Load into upper input fields">
+                  <i class="fa-solid fa-arrow-up-from-bracket"></i> Load
+                </button>
+              </div>
+              <span class="font-mono text-[10px] ${stateCls[state] || "text-slate-300"} uppercase font-bold">${state}</span>
+            </div>
+            <div class="flex items-center justify-between text-[10px] text-slate-400">
+              <span class="font-mono truncate" title="${rec.proxy || ""}">${proxyLine}${warn}</span>
+              <span class="space-x-1 flex items-center">
+                ${statusChip((p.facebook || {}).status)}<span class="text-slate-600">FB</span>
+                ${statusChip((p.instagram || {}).status)}<span class="text-slate-600">IG</span>
+                ${statusChip((p.metricool || {}).status)}<span class="text-slate-600">MC</span>
+              </span>
+            </div>
+            <div class="grid grid-cols-5 gap-1 pt-0.5">
+              <button onclick="runIdentity('${id}','facebook')" class="py-1 rounded bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 border border-blue-500/30 text-[10px]" title="Run Facebook">FB</button>
+              <button onclick="runIdentity('${id}','instagram')" class="py-1 rounded bg-pink-600/20 hover:bg-pink-600/30 text-pink-300 border border-pink-500/30 text-[10px]" title="Run Instagram">IG</button>
+              <button onclick="runIdentity('${id}','metricool')" class="py-1 rounded bg-teal-600/20 hover:bg-teal-600/30 text-teal-300 border border-teal-500/30 text-[10px]" title="Run Metricool">MC</button>
+              <button onclick="rotateIdentitySession('${id}')" class="py-1 rounded bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 border border-amber-500/30 text-[10px]" title="Rotate session nonce (new exit IP)">Rotate IP</button>
+              <button onclick="discardIdentity('${id}')" class="py-1 rounded bg-red-600/20 hover:bg-red-600/30 text-red-300 border border-red-500/30 text-[10px]" title="Archive identity">Bin</button>
+            </div>
+          </div>`;
+        }).join("");
+      } catch (e) {
+        list.innerHTML = `<div class="text-red-400">Failed to load identities: ${e.message}</div>`;
+      }
+    }
+    loadIdentities();
+
+    function fillNewIdentityFromMain() {
+      document.getElementById("newIdentityAccount").value = (document.getElementById("rawAccount").value || "").trim();
+      document.getElementById("newIdentityProxy").value = (document.getElementById("proxyInput").value || "").trim();
+    }
+
+    async function saveCurrentAsIdentity() {
+      const account = (document.getElementById("rawAccount").value || "").trim();
+      const proxy = (document.getElementById("proxyInput").value || "").trim();
+      if (!account) {
+        appendLog("[Identity] Please paste an account string into the credentials box first.", "text-red-400");
+        return;
+      }
+      const email = account.split("|")[0].trim();
+      appendLog(`[Identity] Registering ${email} as unified identity...`, "text-amber-300");
+      try {
+        const res = await fetch("/api/identities/new", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, account, proxy })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || data.detail || "registration failed");
+        appendLog(`[Identity] Successfully registered identity: ${data.identity.identity_id}`, "text-emerald-400");
+        loadIdentities();
+      } catch (e) {
+        appendLog("[Identity Error] " + e.message, "text-red-400");
+      }
+    }
+
+    async function loadIdentityIntoForm(id) {
+      try {
+        const res = await fetch("/api/identities");
+        const data = await res.json();
+        const found = (data.identities || []).find(x => x.identity_id === id);
+        if (!found) return;
+        document.getElementById("rawAccount").value = found.account_string || found.email;
+        if (found.proxy) document.getElementById("proxyInput").value = found.proxy;
+        parseAccountInput();
+        appendLog(`[Identity] Loaded ${found.identity_id} into credentials form.`, "text-blue-400");
+      } catch (e) {
+        appendLog(`[Identity] Failed to load ${id}: ${e.message}`, "text-red-400");
+      }
+    }
+
+    async function createIdentity() {
+      const account = document.getElementById("newIdentityAccount").value.trim();
+      let proxy = document.getElementById("newIdentityProxy").value.trim();
+      if (!proxy) {
+        proxy = (document.getElementById("proxyInput").value || "").trim();
+      }
+      if (!account) {
+        appendLog("[Identity] Paste an account string or email first.", "text-red-400");
+        return;
+      }
+      const email = account.split("|")[0].trim();
+      try {
+        const res = await fetch("/api/identities/new", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, account, proxy })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || data.detail || "create failed");
+        appendLog(`[Identity] Created ${data.identity.identity_id}`, "text-emerald-400");
+        document.getElementById("newIdentityAccount").value = "";
+        document.getElementById("newIdentityProxy").value = "";
+        document.getElementById("newIdentityForm").classList.add("hidden");
+        loadIdentities();
+      } catch (e) {
+        appendLog("[Identity] " + e.message, "text-red-400");
+      }
+    }
+
+    async function runIdentity(id, platform) {
+      const headless = document.getElementById("headlessToggle").checked;
+      try {
+        const res = await fetch(`/api/identities/${encodeURIComponent(id)}/run`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ platform, headless })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || data.detail || "run failed");
+        appendLog(`[Identity] ${platform.toUpperCase()} started for ${id}`, "text-blue-400");
+        setTaskRunning(true, `${platform.toUpperCase()} / ${id}`);
+        loadIdentities();
+      } catch (e) {
+        appendLog("[Identity] " + e.message, "text-red-400");
+      }
+    }
+
+    async function rotateIdentitySession(id) {
+      appendLog(`[Identity] Rotating exit session for ${id}...`, "text-amber-300");
+      try {
+        const res = await fetch(`/api/identities/${encodeURIComponent(id)}/rotate-session`, {
+          method: "POST"
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || "rotate failed");
+        appendLog(`[Identity] ${id} session rotated to nonce=${data.identity.session_nonce}. Next run will use a fresh exit IP.`, "text-emerald-400");
+        loadIdentities();
+      } catch (e) {
+        appendLog("[Identity Error] " + e.message, "text-red-400");
+      }
+    }
+
+    async function rotateIdentityProxy(id) {
+      const proxy = prompt(`New proxy for ${id} (user:pass@host:port):`);
+      if (!proxy) return;
+      appendLog(`[Identity] Verifying new proxy for ${id}...`, "text-amber-300");
+      try {
+        const res = await fetch(`/api/identities/${encodeURIComponent(id)}/proxy`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ proxy, verify: true })
+        });
+        const data = await res.json();
+        if (!data.ok) {
+          const why = (data.reasons || [data.error || "unknown"]).join("; ");
+          appendLog(`[Identity] Proxy rejected: ${why}`, "text-red-400");
+        } else {
+          appendLog(`[Identity] Proxy OK: ${data.ip} ${data.country} ${data.isp || ""}`, "text-emerald-400");
+        }
+        loadIdentities();
+      } catch (e) {
+        appendLog("[Identity] " + e.message, "text-red-400");
+      }
+    }
+
+    async function discardIdentity(id) {
+      if (!confirm(`Discard ${id}? The profile folder is archived and the identity is marked discarded.`)) return;
+      try {
+        const res = await fetch(`/api/identities/${encodeURIComponent(id)}/discard`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ remove_profile: true })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || data.detail || "discard failed");
+        appendLog(`[Identity] Discarded ${id}`, "text-slate-400");
+        loadIdentities();
+      } catch (e) {
+        appendLog("[Identity] " + e.message, "text-red-400");
+      }
+    }
+
+    // Supabase Config & Test
+    async function loadSupabaseConfig() {
+      try {
+        const res = await fetch("/api/supabase/config");
+        const data = await res.json();
+        const urlInput = document.getElementById("supabaseUrlInput");
+        const keyInput = document.getElementById("supabaseKeyInput");
+        const badge = document.getElementById("supabaseStatusBadge");
+        if (data.supabase_url) {
+          urlInput.value = data.supabase_url;
+          if (data.supabase_key) keyInput.value = data.supabase_key;
+          badge.className = "text-[10px] px-2 py-0.5 rounded bg-teal-950 text-teal-400 border border-teal-800/50 font-medium";
+          badge.innerText = "Configured";
+        } else {
+          badge.className = "text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-400 font-medium";
+          badge.innerText = "Not Configured";
+        }
+      } catch (e) {}
+    }
+    loadSupabaseConfig();
+
+    async function saveSupabaseConfig() {
+      const url = document.getElementById("supabaseUrlInput").value.trim();
+      const key = document.getElementById("supabaseKeyInput").value.trim();
+      const badge = document.getElementById("supabaseStatusBadge");
+      try {
+        const res = await fetch("/api/supabase/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ supabase_url: url, supabase_key: key, enabled: true })
+        });
+        const data = await res.json();
+        if (data.ok && url) {
+          badge.className = "text-[10px] px-2 py-0.5 rounded bg-teal-950 text-teal-400 border border-teal-800/50 font-medium";
+          badge.innerText = "Configured";
+          appendLog("[Supabase] Database settings saved successfully.", "text-teal-400");
+        } else {
+          badge.className = "text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-400 font-medium";
+          badge.innerText = "Not Configured";
+          appendLog("[Supabase] Settings cleared.", "text-slate-400");
+        }
+      } catch (e) {
+        appendLog(`[Supabase Error] Failed to save config: ${e.message}`, "text-red-400");
+      }
+    }
+
+    async function testSupabase() {
+      appendLog("[Supabase] Testing connection to Supabase database...", "text-teal-400");
+      try {
+        await saveSupabaseConfig();
+        const res = await fetch("/api/supabase/test", { method: "POST" });
+        const data = await res.json();
+        if (data.success) {
+          appendLog("[Supabase Success] Test account row verified and upserted in PostgreSQL!", "text-emerald-400");
+        } else {
+          appendLog(`[Supabase Error] Test failed (${data.status || "HTTP Error"}): ${data.error || JSON.stringify(data)}`, "text-amber-400");
+        }
+      } catch (err) {
+        appendLog(`[Supabase Error] Failed to reach Supabase: ${err.message}`, "text-red-400");
+      }
+    }
+
+    // Auto-refresh screenshot ticker every 5 seconds
+    setInterval(() => {
+      const img = document.getElementById("liveScreenshot");
+      img.src = `/api/latest-screenshot?t=${Date.now()}`;
+    }, 5000);
+  </script>
+</body>
+</html>
