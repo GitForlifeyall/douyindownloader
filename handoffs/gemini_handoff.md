@@ -7,6 +7,15 @@ This document logs all architectural decisions, code changes, pipeline updates, 
 
 ## Session History & Major Changes
 
+### [2026-11-22] Metricool Onboarding Survey Randomization
+1. **Implemented Realistic Randomized Survey Selection**:
+   - In both [tools/metricool_camoufox.mjs](file:///c:/Users/shahi/OneDrive/Desktop/douyin/tools/metricool_camoufox.mjs) and [tools/metricool_account_creator.py](file:///c:/Users/shahi/OneDrive/Desktop/douyin/tools/metricool_account_creator.py):
+     - **Stage 1 ("What describes you best?")**: Randomly selects 1 of the 4 role cards (`Content creator, personal brand or influencer`, `Social media management in my company`, `Freelancer working for clients`, `Marketing agency`).
+     - **Stage 2 ("How many people are going to use metricool?")**: Randomly selects 1 of the 2 team options (`Just me`, `I will work with more colleagues`), then clicks **Continue**.
+     - **Stage 3 ("How are you going to use Metricool?")**: Randomly selects 1 of the 4 usage options (`Programming and publishing of content`, `Analysis and reports`, `Create a page for your bio link`, `Conversation management`), then clicks **Continue**.
+   - Generates diverse natural account telemetry and bypasses static survey bot footprints.
+
+
 ### [2026-11-22] Video Registry SQLite Index to Supabase Cloud Synchronization System
 1. **Supabase Schema Architecture (`video_registry`, `registry_movies`, `registry_events`)**:
    - Created [tools/create_video_registry_tables.sql](file:///c:/Users/shahi/OneDrive/Desktop/douyin/tools/create_video_registry_tables.sql) and updated [tools/supabase_schema.sql](file:///c:/Users/shahi/OneDrive/Desktop/douyin/tools/supabase_schema.sql).
