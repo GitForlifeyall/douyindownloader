@@ -347,20 +347,30 @@ def handle_playwright_onboarding(page, max_wait_seconds: int = 30):
         # Dialog 1: "What describes you best?"
         if "What describes you best?" in content:
             logger.info("[Onboarding] Dialog 1 detected: 'What describes you best?'")
-            for role in ["Marketing agency", "Content creator, personal brand or influencer"]:
+            roles = [
+                "Content creator, personal brand or influencer",
+                "Social media management in my company",
+                "Freelancer working for clients",
+                "Marketing agency",
+            ]
+            import random
+            random.shuffle(roles)
+            for role in roles:
                 loc = page.locator(f"text='{role}'").first
                 if loc.count() > 0 and loc.is_visible():
-                    logger.info(f"[Onboarding] Selecting role: '{role}'")
+                    logger.info(f"[Onboarding] Randomly selecting role: '{role}'")
                     loc.click(force=True)
-                    page.wait_for_timeout(400)
+                    page.wait_for_timeout(500)
                     break
 
-            for team in ["Just me", "I will work with more colleagues"]:
+            teams = ["Just me", "I will work with more colleagues"]
+            random.shuffle(teams)
+            for team in teams:
                 loc = page.locator(f"text='{team}'").first
                 if loc.count() > 0 and loc.is_visible():
-                    logger.info(f"[Onboarding] Selecting team: '{team}'")
+                    logger.info(f"[Onboarding] Randomly selecting team: '{team}'")
                     loc.click(force=True)
-                    page.wait_for_timeout(400)
+                    page.wait_for_timeout(500)
                     break
 
             cont_btn = page.locator("button:has-text('Continue')").first
@@ -373,11 +383,21 @@ def handle_playwright_onboarding(page, max_wait_seconds: int = 30):
         # Dialog 2: "How are you going to use Metricool?"
         if "How are you going to use Metricool?" in content:
             logger.info("[Onboarding] Dialog 2 detected: 'How are you going to use Metricool?'")
-            prog = page.locator("text='Programming and publishing of content'").first
-            if prog.count() > 0 and prog.is_visible():
-                logger.info("[Onboarding] Selecting 'Programming and publishing of content'")
-                prog.click(force=True)
-                page.wait_for_timeout(400)
+            usages = [
+                "Programming and publishing of content",
+                "Analysis and reports",
+                "Create a page for your bio link",
+                "Conversation management",
+            ]
+            import random
+            random.shuffle(usages)
+            for usage in usages:
+                loc = page.locator(f"text='{usage}'").first
+                if loc.count() > 0 and loc.is_visible():
+                    logger.info(f"[Onboarding] Randomly selecting usage: '{usage}'")
+                    loc.click(force=True)
+                    page.wait_for_timeout(500)
+                    break
 
             cont2 = page.locator("button:has-text('Continue')").last
             if cont2.count() > 0 and cont2.is_visible():

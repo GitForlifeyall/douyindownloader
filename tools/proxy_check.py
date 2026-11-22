@@ -8,8 +8,10 @@ Gate every account-creation run behind a real proxy check.
 What it rejects:
   * Oxylabs Web Unblocker endpoints (unblock.oxylabs.io, wu_ usernames) - those
     IPs are built for scraping and are burned for Meta signups.
-  * Any exit country other than the required one (default US).
+  * An exit country that contradicts the proxy's own -cc-<country> pin
+    (REQUIRE_COUNTRY = "AUTO": no -cc- means any country is accepted).
   * A proxy that cannot reach the geo endpoint at all.
+  * An exit ISP that looks like a datacenter / hosting network.
 
 Usage:
   python tools/proxy_check.py --proxy "user:pass@pr.oxylabs.io:7777"

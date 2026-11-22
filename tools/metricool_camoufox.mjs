@@ -350,21 +350,48 @@ async function handleMetricoolOnboarding(page, maxWaitMs = 35000) {
     if (pageHtml.includes("What describes you best?")) {
       console.log("[Onboarding] Dialog 1 detected: 'What describes you best?'");
 
-      const agencyCard = page.locator("text='Marketing agency'").first();
-      const creatorCard = page.locator("text='Content creator'").first();
-      if ((await agencyCard.count()) > 0 && (await agencyCard.isVisible())) {
-        await agencyCard.click({ force: true });
-      } else if ((await creatorCard.count()) > 0 && (await creatorCard.isVisible())) {
-        await creatorCard.click({ force: true });
+      // 1. Randomly pick any one of the 4 role cards (Screenshot 1)
+      const roleOptions = [
+        "Content creator, personal brand or influencer",
+        "Social media management in my company",
+        "Freelancer working for clients",
+        "Marketing agency",
+      ];
+      const shuffledRoles = [...roleOptions].sort(() => Math.random() - 0.5);
+      let roleSelected = false;
+      for (const roleText of shuffledRoles) {
+        const card = page.locator(`text='${roleText}'`).first();
+        if ((await card.count()) > 0 && (await card.isVisible())) {
+          console.log(`[Onboarding] Randomly selected role: '${roleText}'`);
+          await card.click({ force: true });
+          roleSelected = true;
+          await page.waitForTimeout(600);
+          break;
+        }
       }
-      await page.waitForTimeout(400);
-
-      const justMe = page.locator("text='Just me'").first();
-      if ((await justMe.count()) > 0 && (await justMe.isVisible())) {
-        await justMe.click({ force: true });
+      if (!roleSelected) {
+        const firstCard = page.locator(".v-dialog .v-card, .v-dialog [role='button']").first();
+        if ((await firstCard.count()) > 0) await firstCard.click({ force: true });
+        await page.waitForTimeout(600);
       }
-      await page.waitForTimeout(400);
 
+      // 2. Randomly pick any one of the team options (Screenshot 2: "How many people are going to use metricool?")
+      const teamOptions = [
+        "Just me",
+        "I will work with more colleagues",
+      ];
+      const shuffledTeams = [...teamOptions].sort(() => Math.random() - 0.5);
+      for (const teamText of shuffledTeams) {
+        const card = page.locator(`text='${teamText}'`).first();
+        if ((await card.count()) > 0 && (await card.isVisible())) {
+          console.log(`[Onboarding] Randomly selected team option: '${teamText}'`);
+          await card.click({ force: true });
+          await page.waitForTimeout(600);
+          break;
+        }
+      }
+
+      // 3. Click Continue (Screenshot 2)
       const contBtn = page.locator("button:has-text('Continue')").first();
       if ((await contBtn.count()) > 0 && (await contBtn.isVisible())) {
         console.log("[Onboarding] Clicking Continue on Dialog 1...");
@@ -374,15 +401,29 @@ async function handleMetricoolOnboarding(page, maxWaitMs = 35000) {
       continue;
     }
 
-    // Dialog 2: "How are you going to use Metricool?"
+    // Dialog 2: "How are you going to use Metricool?" (Screenshot 3)
     if (pageHtml.includes("How are you going to use Metricool?")) {
       console.log("[Onboarding] Dialog 2 detected: 'How are you going to use Metricool?'");
-      const prog = page.locator("text='Programming and publishing of content'").first();
-      if ((await prog.count()) > 0 && (await prog.isVisible())) {
-        await prog.click({ force: true });
-        await page.waitForTimeout(400);
+      
+      // Randomly pick any one of the usage options (Screenshot 3)
+      const usageOptions = [
+        "Programming and publishing of content",
+        "Analysis and reports",
+        "Create a page for your bio link",
+        "Conversation management",
+      ];
+      const shuffledUsage = [...usageOptions].sort(() => Math.random() - 0.5);
+      for (const usageText of shuffledUsage) {
+        const card = page.locator(`text='${usageText}'`).first();
+        if ((await card.count()) > 0 && (await card.isVisible())) {
+          console.log(`[Onboarding] Randomly selected usage option: '${usageText}'`);
+          await card.click({ force: true });
+          await page.waitForTimeout(600);
+          break;
+        }
       }
 
+      // Click Continue (Screenshot 3)
       const cont2 = page.locator("button:has-text('Continue')").last();
       if ((await cont2.count()) > 0 && (await cont2.isVisible())) {
         console.log("[Onboarding] Clicking Continue on Dialog 2...");
