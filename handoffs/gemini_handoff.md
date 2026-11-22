@@ -7,6 +7,10 @@ This document logs all architectural decisions, code changes, pipeline updates, 
 
 ## Session History & Major Changes
 
+### [2026-11-22] FlowKit Environment & Python Executable Alignment
+1. **FlowKit Agent Python Environment**:
+   - In [tools/flow_profile_manager.py](file:///c:/Users/shahi/OneDrive/Desktop/douyin/tools/flow_profile_manager.py): updated `run_agent()` to prefer the virtualenv Python (`.venv/Scripts/python.exe`) containing `websockets`, `fastapi`, and `uvicorn`, preventing `ModuleNotFoundError` when invoking via system Python.
+
 ### [2026-11-22] Merged Facebook + Metricool Single Browser Session Architecture
 1. **Single-Context Unified Browser Automation**:
    - Combined Facebook and Metricool account creation into a single unified browser execution (`Camoufox` engine) sharing the exact same residential proxy node, verified exit IP, C++ kernel fingerprint seeds, and isolated profile directory (`output/profiles/<identity_id>`).

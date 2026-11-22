@@ -195,8 +195,11 @@ def run_agent(profile_name: str) -> None:
     if data.get("flow_project_id"):
         env["FLOW_PROJECT_ID"] = data.get("flow_project_id")
 
+    venv_py = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
+    py_exe = str(venv_py) if venv_py.exists() else sys.executable
+
     print(f"Starting FlowKit Agent for profile [{profile_name}] on port {env['API_PORT']}...")
-    subprocess.run([sys.executable, "-m", "agent.main"], cwd=str(FLOWKIT_DIR), env=env)
+    subprocess.run([py_exe, "-m", "agent.main"], cwd=str(FLOWKIT_DIR), env=env)
 
 
 def main():
