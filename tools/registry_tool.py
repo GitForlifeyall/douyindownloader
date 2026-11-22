@@ -107,6 +107,31 @@ def cmd_export(registry: VideoRegistry, args) -> None:
     outputs = registry.export(include_db_backup=args.db_backup)
     for key, value in outputs.items():
         print(f"{key}: {value}")
+    if getattr(args, "supabase", False):
+        from tools.sync_registry_to_supabase import sync_registry
+        print("\n[Supabase] Synchronizing SQLite database to cloud Supabase...")
+        res = sync_registry(registry.db_path)
+        for tbl, count in res.items():
+            print(f"  {tbl}: {count} row(s) synced to Supabase")
+
+
+def cmd_supabase(registry: VideoRegistry, args) -> None:
+    from tools.sync_registry_to_supabase import print_stats, sync_registry
+    if args.stats or (not args.sync_all and not args.videos and not args.movies and not args.events):
+        print_stats(registry.db_path)
+        if not args.sync_all and not args.videos and not args.movies and not args.events:
+            print("Tip: Run with --sync-all to push all SQLite records to Supabase.\n")
+            return
+    res = sync_registry(
+        registry.db_path,
+        sync_videos=args.sync_all or args.videos,
+        sync_movies=args.sync_all or args.movies,
+        sync_events=args.sync_all or args.events,
+        dry_run=args.dry_run,
+    )
+    print("\nSync Results:")
+    for k, v in res.items():
+        print(f"  {k}: {v} row(s) synced to Supabase")
 
 
 def _record_pending_state(registry: VideoRegistry, state_path: Path, drive_root: Path) -> int:
@@ -440,6 +465,15 @@ def main() -> None:
 
     export_parser = sub.add_parser("export")
     export_parser.add_argument("--db-backup", action="store_true", help="Also copy the SQLite file to the snapshot folder")
+    export_parser.add_argument("--supabase", action="store_true", help="Also synchronize all tables to Supabase cloud")
+
+    supabase_parser = sub.add_parser("supabase", help="Inspect and sync registry to cloud Supabase")
+    supabase_parser.add_argument("--sync-all", action="store_true", help="Sync videos, movies, and events")
+    supabase_parser.add_argument("--videos", action="store_true", help="Sync videos table only")
+    supabase_parser.add_argument("--movies", action="store_true", help="Sync movies table only")
+    supabase_parser.add_argument("--events", action="store_true", help="Sync events table only")
+    supabase_parser.add_argument("--stats", action="store_true", help="Compare SQLite vs Supabase counts")
+    supabase_parser.add_argument("--dry-run", action="store_true", help="Simulate sync without uploading")
 
     backfill_parser = sub.add_parser("backfill")
     backfill_parser.add_argument("--pending-state", default=str(DEFAULT_PENDING_STATE))
@@ -462,6 +496,7 @@ def main() -> None:
         "movie": cmd_movie,
         "get": cmd_get,
         "export": cmd_export,
+        "supabase": cmd_supabase,
         "backfill": cmd_backfill,
         "resolve-links": cmd_resolve_links,
     }

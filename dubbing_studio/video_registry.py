@@ -761,7 +761,23 @@ class VideoRegistry:
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_name(f"{target.name}.tmp")
         writer(tmp)
-        os.replace(tmp, target)
+        for attempt in range(5):
+            try:
+                os.replace(tmp, target)
+                return
+            except PermissionError:
+                import time
+                time.sleep(0.05 * (attempt + 1))
+        try:
+            if target.exists():
+                target.unlink(missing_ok=True)
+            os.replace(tmp, target)
+        except Exception:
+            try:
+                shutil.copy2(str(tmp), str(target))
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
 
     def export(
         self,
@@ -841,6 +857,13 @@ class VideoRegistry:
             self.export(include_db_backup=False)
         except Exception as exc:
             print(f"[Registry] Warning: snapshot export failed ({exc})")
+
+        if os.getenv("VIDEO_REGISTRY_NO_SUPABASE", "").strip() not in ("1", "true", "True"):
+            try:
+                from tools.sync_registry_to_supabase import sync_registry
+                sync_registry(self.db_path, sync_videos=True, sync_movies=True, sync_events=False)
+            except Exception:
+                pass
 
 
 _DEFAULT_REGISTRY: Optional[VideoRegistry] = None

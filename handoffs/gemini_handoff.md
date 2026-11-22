@@ -7,6 +7,28 @@ This document logs all architectural decisions, code changes, pipeline updates, 
 
 ## Session History & Major Changes
 
+### [2026-11-22] Video Registry SQLite Index to Supabase Cloud Synchronization System
+1. **Supabase Schema Architecture (`video_registry`, `registry_movies`, `registry_events`)**:
+   - Created [tools/create_video_registry_tables.sql](file:///c:/Users/shahi/OneDrive/Desktop/douyin/tools/create_video_registry_tables.sql) and updated [tools/supabase_schema.sql](file:///c:/Users/shahi/OneDrive/Desktop/douyin/tools/supabase_schema.sql).
+   - Designed PostgreSQL tables mirroring SQLite `video_registry.db`:
+     - `public.video_registry`: 35 columns tracking Douyin video IDs, channel names, rendered final filenames, drive folder/link, movie metadata, and timestamps with unique constraint on `video_id`.
+     - `public.registry_movies`: tracks movie identities and recaps with unique constraint on `movie_key`.
+     - `public.registry_events`: pipeline timeline and audit history.
+     - Full RLS policies, indexes, and automated `updated_at` triggers.
+2. **Dedicated Cloud Sync Tool (`tools/sync_registry_to_supabase.py`)**:
+   - Created [tools/sync_registry_to_supabase.py](file:///c:/Users/shahi/OneDrive/Desktop/douyin/tools/sync_registry_to_supabase.py) with `--sync-all`, `--videos-only`, `--movies-only`, `--events-only`, and `--stats`.
+   - Implemented chunked PostgREST batch upsert (`resolution=merge-duplicates`) with ISO-8601 timestamp sanitization.
+   - Built table existence checks that gracefully prompt for SQL execution if tables are missing.
+3. **Integrated CLI Command in `tools/registry_tool.py`**:
+   - Added `python tools/registry_tool.py supabase --stats` and `--sync-all`.
+   - Added `--supabase` flag to `python tools/registry_tool.py export --supabase`.
+4. **Resilience & Windows File Locking Improvements**:
+   - In `dubbing_studio/video_registry.py`:
+     - Enhanced `_atomic_write` with retries and fallback to avoid Windows `[WinError 5] Access is denied` when Google Drive Desktop indexes files.
+     - Added real-time auto-sync to Supabase in `_after_write` so pipeline runs stream directly to the cloud.
+     - Protected heavy `dubbing_studio/__init__.py` imports with `try/except ImportError` so CLI tools run without requiring all optional ML dependencies.
+
+
 ### [2026-11-22] Metricool Automation 100% End-to-End Success & GitHub Branch Push
 1. **GitHub Branch Pushed Cleanly**:
    - Pushed `feature/identity-supabase-pipeline` to [https://github.com/GitForlifeyall/douyindownloader](https://github.com/GitForlifeyall/douyindownloader).

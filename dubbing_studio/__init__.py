@@ -18,19 +18,51 @@ from .key_pool import (
 )
 from .downloader import DownloaderAPI
 from .transcriber import Transcriber
-from .translator import (
-    SRTDubTranslator,
-    inject_constraints_into_srt,
-    clean_and_verify_srt,
-    translate_and_rewrite_srt,
-    SYSTEM_PROMPT,
-)
-from .tts_engine import KokoroTTS
-from .tts import SarvamTTS, generate_sarvam_tts
-from .tts_google import GoogleGeminiTTS
-from .tts_elevenlabs import ElevenLabsTTS
-from .tts_omnivoice import OmniVoiceTTS
-from .separator import AudioStemSeparator
+try:
+    from .translator import (
+        SRTDubTranslator,
+        inject_constraints_into_srt,
+        clean_and_verify_srt,
+        translate_and_rewrite_srt,
+        SYSTEM_PROMPT,
+    )
+except ImportError:
+    SRTDubTranslator = None
+    inject_constraints_into_srt = None
+    clean_and_verify_srt = None
+    translate_and_rewrite_srt = None
+    SYSTEM_PROMPT = None
+
+try:
+    from .tts_engine import KokoroTTS
+except ImportError:
+    KokoroTTS = None
+
+try:
+    from .tts import SarvamTTS, generate_sarvam_tts
+except ImportError:
+    SarvamTTS = None
+    generate_sarvam_tts = None
+
+try:
+    from .tts_google import GoogleGeminiTTS
+except ImportError:
+    GoogleGeminiTTS = None
+
+try:
+    from .tts_elevenlabs import ElevenLabsTTS
+except ImportError:
+    ElevenLabsTTS = None
+
+try:
+    from .tts_omnivoice import OmniVoiceTTS
+except ImportError:
+    OmniVoiceTTS = None
+
+try:
+    from .separator import AudioStemSeparator
+except ImportError:
+    AudioStemSeparator = None
 from .anti_accent import (
     balance_consecutive_english,
     count_syllables,
