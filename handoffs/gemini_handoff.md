@@ -7,6 +7,26 @@ This document logs all architectural decisions, code changes, pipeline updates, 
 
 ## Session History & Major Changes
 
+### [2026-11-22] Merged Facebook + Metricool Single Browser Session Architecture
+1. **Single-Context Unified Browser Automation**:
+   - Combined Facebook and Metricool account creation into a single unified browser execution (`Camoufox` engine) sharing the exact same residential proxy node, verified exit IP, C++ kernel fingerprint seeds, and isolated profile directory (`output/profiles/<identity_id>`).
+   - Flow: **Tab 1: Facebook Account Creation & Warmup** -> **Tab 2: Metricool Automated Registration & Onboarding** in the same live browser window.
+   - Preserves both tabs open upon completion (`browser.on("close")`) so the user can inspect both profiles and settings simultaneously without the browser closing.
+2. **Modular Reusable Metricool Flow (`tools/metricool_camoufox.mjs`)**:
+   - Extracted core signup into `runMetricoolSignUpFlow(page, context, options)` which can be invoked either standalone or as Tab 2 within another browser session.
+   - Exported password compliance generator `ensureMetricoolPasswordPolicy` so both Facebook and Metricool share the exact identical password meeting both platform requirements.
+3. **Facebook Automation Combo Hook (`tools/facebook_signup_camoufox.mjs`)**:
+   - Added `--combo` flag support.
+   - Automatically opens Tab 2 (`context.newPage()`), runs `runMetricoolSignUpFlow`, registers session and cookies to `output/metricool_registered_accounts.json` and Supabase cloud.
+4. **Runner & Store Support (`tools/run_identity.py` & `tools/identity_store.py`)**:
+   - Added `"combo"` to `PLATFORMS`.
+   - Updated `build_command` in `run_identity.py` to route `"combo"` through `facebook_signup_camoufox.mjs --combo`.
+   - Updated terminal recording to verify both Facebook and Metricool registry statuses and sync both records to Supabase.
+5. **Studio Dashboard Integration (`tools/dashboard_server.py` & `tools/dashboard_ui.html`)**:
+   - Added prominent **"Create FB + Metricool (Merged Session)"** button to Section 3 of the studio dashboard.
+   - Added **"FB+MC"** quick action button on each identity card in the identities master table.
+   - Updated backend validation in `/api/start-task` and `/api/identities/{identity_id}/run` to accept `platform: "combo"`.
+
 ### [2026-11-22] Metricool Onboarding Survey Randomization
 1. **Implemented Realistic Randomized Survey Selection**:
    - In both [tools/metricool_camoufox.mjs](file:///c:/Users/shahi/OneDrive/Desktop/douyin/tools/metricool_camoufox.mjs) and [tools/metricool_account_creator.py](file:///c:/Users/shahi/OneDrive/Desktop/douyin/tools/metricool_account_creator.py):

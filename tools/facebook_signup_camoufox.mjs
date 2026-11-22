@@ -49,6 +49,7 @@ import { Camoufox } from "./node_modules/camoufox-js/dist/index.js";
 // device identity stable between sessions.
 import { FingerprintGenerator } from "./node_modules/fingerprint-generator/index.mjs";
 import { logToSupabase } from "./supabase_logger.mjs";
+import { runMetricoolSignUpFlow, ensureMetricoolPasswordPolicy } from "./metricool_camoufox.mjs";
 const FP_GENERATOR = new FingerprintGenerator({ browsers: ["firefox"], operatingSystems: ["windows"] });
 let activePage = null;
 
@@ -127,6 +128,7 @@ const skipWarmup = hasFlag("--skip-warmup");
 const skipPage = hasFlag("--skip-page");
 const skip2fa = hasFlag("--skip-2fa");
 const keepProfile = hasFlag("--resume") || hasFlag("--keep");
+const isCombo = hasFlag("--combo") || hasFlag("--then-metricool") || hasFlag("--merged");
 
 const REGISTERED_ACCOUNTS_FILE = path.resolve("output", "facebook_registered_accounts.json");
 const RISK_LOG_FILE = path.resolve("output", "facebook_risk_log.json");
@@ -2362,7 +2364,8 @@ async function run() {
   const { firstName, lastName, fullName } = extractNameFromEmail(email);
   const dobObj = generateRandomBirthday();
   const randomGender = Math.random() < 0.5 ? "Female" : "Male";
-  const password = getArg("--password") || generateUniquePassword(firstName, lastName);
+  const rawPassword = getArg("--password") || (accountArg && accountArg.includes("|") && accountArg.split("|")[1]) || generateUniquePassword(firstName, lastName);
+  const password = ensureMetricoolPasswordPolicy(rawPassword);
 
   console.log("=".repeat(60));
   console.log("FACEBOOK AUTOMATED REGISTRATION (CAMOUFOX ANTI-DETECT + STICKY PROXY)");
@@ -3168,10 +3171,58 @@ async function run() {
 
     saveRiskLog();
 
+    // 10. Merged Session (Combo Mode): Facebook -> Metricool in same browser session
+    let metricoolResult = null;
+    if (isCombo && context) {
+      console.log("\n" + "=".repeat(75));
+      console.log("[Combo Mode] ✅ Facebook Account Creation Completed!");
+      console.log(`[Combo Mode] Target Email: ${email}`);
+      console.log("[Combo Mode] Opening Tab 2 in SAME browser session for Metricool...");
+      console.log("[Combo Mode] Shared proxy exit IP, fingerprint seeds, and cookie context.");
+      console.log("=".repeat(75) + "\n");
+
+      try {
+        const metricoolPage = await context.newPage();
+        activePage = metricoolPage;
+        await metricoolPage.bringToFront().catch(() => { });
+
+        const rootMirrorDir = path.resolve("profiles metricool", sanitizeProfileName(email.split("@")[0] || email));
+        metricoolResult = await runMetricoolSignUpFlow(metricoolPage, context, {
+          email,
+          password,
+          clientId,
+          refreshToken,
+          proxy: effectiveProxy,
+          profileDir,
+          rootMirrorDir,
+        });
+
+        console.log("\n" + "=".repeat(75));
+        console.log("[Combo Mode] ✅ Metricool Registration Completed!");
+        console.log(`[Combo Mode] Status:    ${metricoolResult?.status || "unknown"}`);
+        console.log(`[Combo Mode] Dashboard: ${metricoolResult?.dashboard_url || "unknown"}`);
+        console.log("=".repeat(75) + "\n");
+      } catch (comboErr) {
+        console.error(`[Combo Mode Error] Metricool step failed: ${comboErr.message}`);
+      }
+    }
+
     // Keep browser window open for user visibility & inspection
-    console.log("[Facebook] >>> SESSION IS LIVE ON YOUR SCREEN <<<");
-    console.log("[Facebook] Browser will remain open. Close the browser window when you are done.");
-    await new Promise((resolve) => browser.on("close", resolve));
+    console.log("\n" + "=".repeat(75));
+    if (isCombo) {
+      console.log("[Combo Mode] >>> MERGED SESSION IS ACTIVE ON YOUR SCREEN <<<");
+      console.log("[Combo Mode] Tab 1: Facebook (Creator Profile / Feed)");
+      console.log("[Combo Mode] Tab 2: Metricool (Evolution Dashboard / Settings)");
+      console.log("[Combo Mode] Browser will remain open for your inspection. Close the browser window when you are done.");
+    } else {
+      console.log("[Facebook] >>> SESSION IS LIVE ON YOUR SCREEN <<<");
+      console.log("[Facebook] Browser will remain open. Close the browser window when you are done.");
+    }
+    console.log("=".repeat(75) + "\n");
+    await new Promise((resolve) => {
+      browser.on("close", resolve);
+      if (context) context.on("close", resolve);
+    });
 
   } catch (err) {
     console.error(`[Facebook Fatal Error]: ${err.stack || err.message || err}`);

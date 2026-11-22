@@ -188,7 +188,7 @@ async def start_task(payload: Dict[str, Any]):
     if not account_str:
         raise HTTPException(status_code=400, detail="Account string is required")
 
-    if platform not in ("facebook", "instagram", "metricool"):
+    if platform not in ("facebook", "instagram", "metricool", "combo"):
         raise HTTPException(status_code=400, detail=f"Unsupported platform: {platform}")
 
     # Register or update identity store so the account gets a unified profile & pinned proxy
@@ -554,7 +554,7 @@ async def run_identity_endpoint(identity_id: str, payload: Dict[str, Any]):
         raise HTTPException(status_code=400, detail="Another task is already running. Please stop it first.")
 
     platform = (payload.get("platform") or "facebook").lower()
-    if platform not in ("facebook", "instagram", "metricool"):
+    if platform not in ("facebook", "instagram", "metricool", "combo"):
         raise HTTPException(status_code=400, detail=f"Unsupported platform: {platform}")
 
     store = _identity_store()

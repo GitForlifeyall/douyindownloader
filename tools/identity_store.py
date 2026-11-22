@@ -51,7 +51,7 @@ IDENTITIES_FILE = OUTPUT_DIR / "identities.json"
 ARCHIVE_DIR = OUTPUT_DIR / "identities_archive"
 PROFILES_ROOT = OUTPUT_DIR / "profiles"
 
-PLATFORMS = ("metricool", "facebook", "instagram")
+PLATFORMS = ("metricool", "facebook", "instagram", "combo")
 
 OK_STATUSES = {"ok", "confirmed", "active", "logged_in", "success", "complete"}
 SUSPENDED_STATUSES = {"suspended", "disabled", "banned", "checkpoint"}

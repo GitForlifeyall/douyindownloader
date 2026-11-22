@@ -519,6 +519,239 @@ async function openFacebookSignUpTab(context) {
   return fbPage;
 }
 
+/**
+ * Reusable Metricool automated registration flow.
+ * Can be executed inside an existing Camoufox context (e.g. Combo Mode Tab 2)
+ * or inside standalone Metricool execution.
+ */
+export async function runMetricoolSignUpFlow(page, context, options = {}) {
+  let flowEmail = options.email;
+  let flowPassword = options.password;
+  const flowClientId = options.clientId;
+  const flowRefreshToken = options.refreshToken;
+  const flowProxy = options.proxy || proxyArg;
+  const flowProfileDir = options.profileDir;
+  const flowRootMirrorDir = options.rootMirrorDir;
+  const flowTempToken = options.tempToken || null;
+
+  console.log("\n" + "=".repeat(60));
+  console.log("[Metricool Flow] Starting automated signup flow...");
+  console.log(`[Metricool Flow] Target Email: ${flowEmail}`);
+  console.log("=".repeat(60) + "\n");
+
+  console.log("[Camoufox] Navigating to registration page: https://app.metricool.com/register...");
+  await safeGoto(page, "https://app.metricool.com/register");
+  await page.waitForTimeout(3000);
+  await saveScreenshot(page, "metricool_01_initial_page.png");
+
+  const emailField = page.locator("input.v-field__input[name='email']");
+  const passField = page.locator("input.v-field__input[name='password']");
+  const submitBtn = page.locator("button:has-text('Get started for free'), button:has-text('started for free'), button:has-text('Start for free')");
+
+  flowPassword = ensureMetricoolPasswordPolicy(flowPassword);
+
+  await emailField.waitFor({ state: "visible", timeout: 35000 });
+  console.log(`[Camoufox] Entering signup credentials for: ${flowEmail}...`);
+  await emailField.click({ force: true }).catch(() => emailField.focus());
+  await emailField.fill("");
+  await page.keyboard.type(flowEmail, { delay: 40 });
+  await page.waitForTimeout(300);
+
+  await passField.click({ force: true }).catch(() => passField.focus());
+  await passField.fill("");
+  await page.keyboard.type(flowPassword, { delay: 50 });
+  await page.waitForTimeout(500);
+
+  // Verify no password validation warning
+  const errorMsg = page.locator(".v-messages__message, .v-input--error");
+  if ((await errorMsg.count()) > 0 && (await errorMsg.first().isVisible())) {
+    const text = await errorMsg.first().textContent();
+    if (text && text.toLowerCase().includes("password")) {
+      console.warn(`[Camoufox] Detected password field requirement note: '${text.trim()}'. Regenerating strict password...`);
+      flowPassword = generateSecurePassword();
+      await passField.click({ force: true }).catch(() => passField.focus());
+      await passField.fill("");
+      await page.keyboard.type(flowPassword, { delay: 50 });
+      await page.waitForTimeout(500);
+    }
+  }
+
+  await saveScreenshot(page, "metricool_02_filled_credentials.png");
+
+  // Check consent checkboxes by clicking the Vuetify selection control once
+  await page.waitForTimeout(500);
+  const isCheckedBefore = await page.evaluate(() => {
+    const input = document.querySelector(".v-checkbox input[type='checkbox']");
+    return input ? input.checked : false;
+  });
+  console.log(`[Camoufox] Consent checkbox checked before click: ${isCheckedBefore}`);
+  if (!isCheckedBefore) {
+    const cbControl = page.locator(".v-checkbox .v-selection-control").first();
+    if (await cbControl.count() > 0) {
+      console.log("[Camoufox] Clicking Vuetify .v-selection-control...");
+      await cbControl.click({ force: true }).catch(() => { });
+    } else {
+      const cbLabel = page.locator("label:has-text('Legal Terms')").first();
+      if (await cbLabel.count() > 0) {
+        console.log("[Camoufox] Clicking Vuetify Legal Terms label...");
+        await cbLabel.click({ force: true }).catch(() => { });
+      }
+    }
+  }
+  await page.waitForTimeout(600);
+
+  // Verify button is enabled
+  let btnState = await page.evaluate(() => {
+    const b = Array.from(document.querySelectorAll("button")).find(x => 
+      x.innerText.toLowerCase().includes("started for free") || 
+      x.innerText.toLowerCase().includes("start for free") ||
+      x.type === "submit"
+    );
+    return { disabled: b?.disabled, text: b?.innerText };
+  });
+  console.log(`[Camoufox] Submit button state: disabled=${btnState?.disabled}, text='${btnState?.text?.trim()}'`);
+  if (btnState?.disabled) {
+    console.warn("[Camoufox] Button still disabled! Trying alternate click on checkbox label...");
+    const label = page.locator(".v-checkbox label, label:has-text('Legal Terms')").first();
+    if (await label.count() > 0) {
+      await label.click({ force: true }).catch(() => { });
+      await page.waitForTimeout(600);
+      btnState = await page.evaluate(() => {
+        const b = Array.from(document.querySelectorAll("button")).find(x => 
+          x.innerText.toLowerCase().includes("started for free") || 
+          x.innerText.toLowerCase().includes("start for free") ||
+          x.type === "submit"
+        );
+        return { disabled: b?.disabled, text: b?.innerText };
+      });
+      console.log(`[Camoufox] Retried button state: disabled=${btnState?.disabled}`);
+    }
+  }
+
+  await saveScreenshot(page, "metricool_03_checkbox_clicked.png");
+
+  console.log(`[Camoufox] Submitting registration form ('${btnState?.text?.trim() || "Get started for free"}')...`);
+  if ((await submitBtn.count()) > 0) {
+    await submitBtn.first().click({ force: true }).catch(() => { });
+  } else {
+    await page.keyboard.press("Enter");
+  }
+  await page.waitForTimeout(6000);
+
+  await saveScreenshot(page, "metricool_04_submitted.png");
+
+  console.log(`[Camoufox] Form submitted. Current URL: ${page.url()}`);
+
+  // Poll verification (Temp-Mail or Outlook)
+  let verification = null;
+  if (flowClientId && flowRefreshToken) {
+    verification = await pollOutlookVerification(flowClientId, flowRefreshToken, 60);
+  } else {
+    verification = await pollTempMailVerification(flowEmail, 60);
+  }
+
+  if (verification && verification.type === "link") {
+    console.log(`[Camoufox] Navigating to activation link: ${verification.data}...`);
+    await safeGoto(page, verification.data);
+    await page.waitForTimeout(5000);
+  } else if (verification && verification.type === "code") {
+    console.log(`[Camoufox] Injecting 6-digit OTP code: ${verification.data}...`);
+    await page.evaluate((otp) => {
+      const inputs = document.querySelectorAll("input[name='otp'], .v-otp-input input, input.v-field__input");
+      if (inputs.length >= 6) {
+        for (let i = 0; i < 6; i++) {
+          inputs[i].value = otp[i];
+          inputs[i].dispatchEvent(new Event("input", { bubbles: true }));
+          inputs[i].dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      } else if (inputs.length > 0) {
+        inputs[0].value = otp;
+        inputs[0].dispatchEvent(new Event("input", { bubbles: true }));
+        inputs[0].dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    }, verification.data);
+    await page.keyboard.type(verification.data, { delay: 100 });
+    await page.waitForTimeout(1000);
+
+    const confirmBtn = page.locator("button:has-text('Confirm code'), button:has-text('Verify')");
+    if ((await confirmBtn.count()) > 0) {
+      await confirmBtn.first().click({ force: true });
+    } else {
+      await page.keyboard.press("Enter");
+    }
+    await page.waitForTimeout(4000);
+  }
+
+  // Complete all 4 onboarding survey dialogs (with randomized survey cards)
+  await handleMetricoolOnboarding(page);
+
+  // Capture session details & cookies
+  const finalUrl = page.url();
+  const finalTitle = await page.title();
+  console.log(`[Camoufox] Final URL: ${finalUrl} | Title: '${finalTitle}'`);
+
+  const cookies = await context.cookies();
+  if (flowProfileDir) {
+    try {
+      const cookiesPath = path.join(flowProfileDir, "cookies.json");
+      fs.writeFileSync(cookiesPath, JSON.stringify(cookies, null, 2), "utf-8");
+      console.log(`[Camoufox] Saved ${cookies.length} session cookies to: ${cookiesPath}`);
+    } catch (e) { }
+  }
+
+  const status = finalUrl.includes("brandSummary") || (finalUrl.includes("app.metricool.com") && !finalUrl.includes("login") && !finalUrl.includes("register"))
+    ? "logged_in"
+    : "partial";
+
+  const sessionData = {
+    email: flowEmail,
+    password: flowPassword,
+    status,
+    dashboard_url: finalUrl,
+    cookies_count: cookies.length,
+    profile_path: flowProfileDir || "",
+    saved_at: new Date().toISOString(),
+    engine: "camoufox_antidetect",
+  };
+  if (flowTempToken) sessionData.temp_mail_token = flowTempToken;
+
+  if (flowProfileDir) {
+    try {
+      fs.writeFileSync(path.join(flowProfileDir, "session_info.json"), JSON.stringify(sessionData, null, 2), "utf-8");
+    } catch (e) { }
+  }
+
+  if (flowRootMirrorDir) {
+    try {
+      fs.mkdirSync(flowRootMirrorDir, { recursive: true });
+      fs.writeFileSync(path.join(flowRootMirrorDir, "cookies.json"), JSON.stringify(cookies, null, 2), "utf-8");
+      fs.writeFileSync(path.join(flowRootMirrorDir, "session_info.json"), JSON.stringify(sessionData, null, 2), "utf-8");
+    } catch (e) { }
+  }
+
+  // Save to master accounts registry
+  saveRegisteredAccount(sessionData);
+
+  // Synchronize to Supabase cloud database
+  try {
+    await logToSupabase({
+      platform: "METRICOOL",
+      email: flowEmail,
+      username: flowEmail.split("@")[0],
+      password: flowPassword,
+      profile_url: finalUrl,
+      full_mail_string: (flowClientId && flowRefreshToken) ? `${flowEmail}|${flowPassword}|${flowRefreshToken}|${flowClientId}` : "",
+      proxy: flowProxy,
+      status: status === "logged_in" ? "ACTIVE" : "FAILED",
+      details: sessionData
+    });
+  } catch (err) {
+    console.warn(`[Supabase] Metricool sync note: ${err.message}`);
+  }
+
+  return sessionData;
+}
+
 async function main() {
   let tempToken = null;
 
@@ -638,151 +871,17 @@ async function main() {
     // ACTION: SIGNUP
     // =========================================================================
     if (action === "signup") {
-      console.log("[Camoufox] Navigating to registration page: https://app.metricool.com/register...");
-      await safeGoto(page, "https://app.metricool.com/register");
-      await page.waitForTimeout(3000);
-      await saveScreenshot(page, "metricool_01_initial_page.png");
-
-      const emailField = page.locator("input.v-field__input[name='email']");
-      const passField = page.locator("input.v-field__input[name='password']");
-      const submitBtn = page.locator("button:has-text('Get started for free'), button:has-text('started for free'), button:has-text('Start for free')");
-
-      password = ensureMetricoolPasswordPolicy(password);
-
-      await emailField.waitFor({ state: "visible", timeout: 35000 });
-      console.log(`[Camoufox] Entering signup credentials for: ${email}...`);
-      await emailField.click({ force: true }).catch(() => emailField.focus());
-      await emailField.fill("");
-      await page.keyboard.type(email, { delay: 40 });
-      await page.waitForTimeout(300);
-
-      await passField.click({ force: true }).catch(() => passField.focus());
-      await passField.fill("");
-      await page.keyboard.type(password, { delay: 50 });
-      await page.waitForTimeout(500);
-
-      // Verify no password validation warning
-      const errorMsg = page.locator(".v-messages__message, .v-input--error");
-      if ((await errorMsg.count()) > 0 && (await errorMsg.first().isVisible())) {
-        const text = await errorMsg.first().textContent();
-        if (text && text.toLowerCase().includes("password")) {
-          console.warn(`[Camoufox] Detected password field requirement note: '${text.trim()}'. Regenerating strict password...`);
-          password = generateSecurePassword();
-          await passField.click({ force: true }).catch(() => passField.focus());
-          await passField.fill("");
-          await page.keyboard.type(password, { delay: 50 });
-          await page.waitForTimeout(500);
-        }
-      }
-
-      await saveScreenshot(page, "metricool_02_filled_credentials.png");
-
-      // Check consent checkboxes by clicking the Vuetify selection control once
-      await page.waitForTimeout(500);
-      const isCheckedBefore = await page.evaluate(() => {
-        const input = document.querySelector(".v-checkbox input[type='checkbox']");
-        return input ? input.checked : false;
+      const res = await runMetricoolSignUpFlow(page, context, {
+        email,
+        password,
+        clientId,
+        refreshToken,
+        proxy: proxyArg,
+        profileDir,
+        rootMirrorDir,
+        tempToken,
       });
-      console.log(`[Camoufox] Consent checkbox checked before click: ${isCheckedBefore}`);
-      if (!isCheckedBefore) {
-        const cbControl = page.locator(".v-checkbox .v-selection-control").first();
-        if (await cbControl.count() > 0) {
-          console.log("[Camoufox] Clicking Vuetify .v-selection-control...");
-          await cbControl.click({ force: true }).catch(() => { });
-        } else {
-          const cbLabel = page.locator("label:has-text('Legal Terms')").first();
-          if (await cbLabel.count() > 0) {
-            console.log("[Camoufox] Clicking Vuetify Legal Terms label...");
-            await cbLabel.click({ force: true }).catch(() => { });
-          }
-        }
-      }
-      await page.waitForTimeout(600);
-
-      // Verify button is enabled
-      let btnState = await page.evaluate(() => {
-        const b = Array.from(document.querySelectorAll("button")).find(x => 
-          x.innerText.toLowerCase().includes("started for free") || 
-          x.innerText.toLowerCase().includes("start for free") ||
-          x.type === "submit"
-        );
-        return { disabled: b?.disabled, text: b?.innerText };
-      });
-      console.log(`[Camoufox] Submit button state: disabled=${btnState?.disabled}, text='${btnState?.text?.trim()}'`);
-      if (btnState?.disabled) {
-        console.warn("[Camoufox] Button still disabled! Trying alternate click on checkbox label...");
-        const label = page.locator(".v-checkbox label, label:has-text('Legal Terms')").first();
-        if (await label.count() > 0) {
-          await label.click({ force: true }).catch(() => { });
-          await page.waitForTimeout(600);
-          btnState = await page.evaluate(() => {
-            const b = Array.from(document.querySelectorAll("button")).find(x => 
-              x.innerText.toLowerCase().includes("started for free") || 
-              x.innerText.toLowerCase().includes("start for free") ||
-              x.type === "submit"
-            );
-            return { disabled: b?.disabled, text: b?.innerText };
-          });
-          console.log(`[Camoufox] Retried button state: disabled=${btnState?.disabled}`);
-        }
-      }
-
-      await saveScreenshot(page, "metricool_03_checkbox_clicked.png");
-
-      console.log(`[Camoufox] Submitting registration form ('${btnState?.text?.trim() || "Get started for free"}')...`);
-      if ((await submitBtn.count()) > 0) {
-        await submitBtn.first().click({ force: true }).catch(() => { });
-      } else {
-        await page.keyboard.press("Enter");
-      }
-      await page.waitForTimeout(6000);
-
-      await saveScreenshot(page, "metricool_04_submitted.png");
-
-      console.log(`[Camoufox] Form submitted. Current URL: ${page.url()}`);
-
-      // Poll verification (Temp-Mail or Outlook)
-      let verification = null;
-      if (clientId && refreshToken) {
-        verification = await pollOutlookVerification(clientId, refreshToken, 60);
-      } else {
-        verification = await pollTempMailVerification(email, 60);
-      }
-
-      if (verification && verification.type === "link") {
-        console.log(`[Camoufox] Navigating to activation link: ${verification.data}...`);
-        await safeGoto(page, verification.data);
-        await page.waitForTimeout(5000);
-      } else if (verification && verification.type === "code") {
-        console.log(`[Camoufox] Injecting 6-digit OTP code: ${verification.data}...`);
-        await page.evaluate((otp) => {
-          const inputs = document.querySelectorAll("input[name='otp'], .v-otp-input input, input.v-field__input");
-          if (inputs.length >= 6) {
-            for (let i = 0; i < 6; i++) {
-              inputs[i].value = otp[i];
-              inputs[i].dispatchEvent(new Event("input", { bubbles: true }));
-              inputs[i].dispatchEvent(new Event("change", { bubbles: true }));
-            }
-          } else if (inputs.length > 0) {
-            inputs[0].value = otp;
-            inputs[0].dispatchEvent(new Event("input", { bubbles: true }));
-            inputs[0].dispatchEvent(new Event("change", { bubbles: true }));
-          }
-        }, verification.data);
-        await page.keyboard.type(verification.data, { delay: 100 });
-        await page.waitForTimeout(1000);
-
-        const confirmBtn = page.locator("button:has-text('Confirm code'), button:has-text('Verify')");
-        if ((await confirmBtn.count()) > 0) {
-          await confirmBtn.first().click({ force: true });
-        } else {
-          await page.keyboard.press("Enter");
-        }
-        await page.waitForTimeout(4000);
-      }
-
-      // Complete all 4 onboarding survey dialogs
-      await handleMetricoolOnboarding(page);
+      console.log(`[Camoufox] Automated Metricool signup completed with status: ${res.status}`);
     }
 
     // =========================================================================
@@ -974,18 +1073,27 @@ async function main() {
   }
 }
 
-main().catch(async (err) => {
-  console.error(`[Camoufox Error]: ${err.stack || err}`);
-  try {
-    if (email) {
-      await logToSupabase({
-        platform: "METRICOOL",
-        email,
-        proxy: proxyArg,
-        status: "FAILED",
-        details: { error: err.message || String(err) }
-      }).catch(() => { });
-    }
-  } catch (e) { }
-  process.exit(1);
-});
+export { ensureMetricoolPasswordPolicy, generateSecurePassword, safeGoto };
+
+const isMain = process.argv[1] && (
+  process.argv[1] === fileURLToPath(import.meta.url) ||
+  path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))
+);
+
+if (isMain) {
+  main().catch(async (err) => {
+    console.error(`[Camoufox Error]: ${err.stack || err}`);
+    try {
+      if (email) {
+        await logToSupabase({
+          platform: "METRICOOL",
+          email,
+          proxy: proxyArg,
+          status: "FAILED",
+          details: { error: err.message || String(err) }
+        }).catch(() => { });
+      }
+    } catch (e) { }
+    process.exit(1);
+  });
+}

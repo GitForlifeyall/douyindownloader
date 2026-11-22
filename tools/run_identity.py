@@ -53,12 +53,14 @@ REGISTRY_FILES = {
     "facebook": OUTPUT_DIR / "facebook_registered_accounts.json",
     "instagram": OUTPUT_DIR / "instagram_registered_accounts.json",
     "metricool": OUTPUT_DIR / "metricool_registered_accounts.json",
+    "combo": OUTPUT_DIR / "facebook_registered_accounts.json",
 }
 
 SCRIPTS = {
     "facebook": TOOLS_DIR / "facebook_signup_camoufox.mjs",
     "instagram": TOOLS_DIR / "instagram_signup_camoufox.mjs",
     "metricool": TOOLS_DIR / "metricool_camoufox.mjs",
+    "combo": TOOLS_DIR / "facebook_signup_camoufox.mjs",
 }
 
 ADOPT_IGNORE = (
@@ -228,7 +230,7 @@ def build_command(record: Dict[str, Any], platform: str, profile_dir: Path,
 
     cmd = [node_exe(), "--experimental-sqlite", str(SCRIPTS[platform])]
 
-    if platform == "metricool" and password:
+    if platform in ("metricool", "combo") and password:
         p = password
         if not re.search(r"[A-Z]", p): p = "M" + p
         if not re.search(r"[a-z]", p): p = p + "a"
@@ -237,7 +239,7 @@ def build_command(record: Dict[str, Any], platform: str, profile_dir: Path,
         if len(p) > 20: p = p[:19] + "!"
         password = p
 
-    if platform in ("facebook", "instagram"):
+    if platform in ("facebook", "instagram", "combo"):
         if record.get("account_string"):
             cmd += ["--account", record["account_string"]]
         else:
@@ -249,6 +251,8 @@ def build_command(record: Dict[str, Any], platform: str, profile_dir: Path,
         if client_id:
             cmd += ["--client-id", client_id]
         cmd += ["--profile-dir", str(profile_dir), "--proxy", proxy]
+        if platform == "combo":
+            cmd += ["--combo"]
         if args.timezone:
             cmd += ["--timezone", args.timezone]
         if exit_ip:
@@ -257,7 +261,7 @@ def build_command(record: Dict[str, Any], platform: str, profile_dir: Path,
             cmd += ["--headless"]
         if args.skip_2fa:
             cmd += ["--skip-2fa"]
-        if platform == "facebook" and args.skip_page:
+        if platform in ("facebook", "combo") and args.skip_page:
             cmd += ["--skip-page"]
         if args.skip_warmup:
             cmd += ["--skip-warmup"]
@@ -485,14 +489,29 @@ def main() -> int:
     elapsed = int(time.time() - started)
 
     # 5. Terminal record, always.
-    reg = registry_status(platform, email)
-    status, note = classify(platform, reg, exit_code)
-    url = ""
-    if reg:
-        url = str(reg.get("page_url") or reg.get("instagram_url") or reg.get("dashboard_url") or "")
-        if not url and reg.get("suspension_url"):
-            url = str(reg["suspension_url"])
-    store.set_platform(identity_id, platform, status, url=url, note=f"{note} (exit={exit_code}, {elapsed}s)")
+    if platform == "combo":
+        fb_reg = registry_status("facebook", email)
+        mc_reg = registry_status("metricool", email)
+        fb_status, fb_note = classify("facebook", fb_reg, exit_code)
+        mc_status, mc_note = classify("metricool", mc_reg, exit_code)
+        fb_url = str((fb_reg or {}).get("page_url") or "")
+        mc_url = str((mc_reg or {}).get("dashboard_url") or "")
+        store.set_platform(identity_id, "facebook", fb_status, url=fb_url, note=f"{fb_note} (combo exit={exit_code})")
+        store.set_platform(identity_id, "metricool", mc_status, url=mc_url, note=f"{mc_note} (combo exit={exit_code})")
+        status = "ok" if (fb_status == "ok" and mc_status == "ok") else ("ok" if fb_status == "ok" else fb_status)
+        note = f"FB:{fb_status} MC:{mc_status}"
+        url = fb_url or mc_url
+        store.set_platform(identity_id, "combo", status, url=url, note=f"{note} (exit={exit_code}, {elapsed}s)")
+        reg = fb_reg or mc_reg
+    else:
+        reg = registry_status(platform, email)
+        status, note = classify(platform, reg, exit_code)
+        url = ""
+        if reg:
+            url = str(reg.get("page_url") or reg.get("instagram_url") or reg.get("dashboard_url") or "")
+            if not url and reg.get("suspension_url"):
+                url = str(reg["suspension_url"])
+        store.set_platform(identity_id, platform, status, url=url, note=f"{note} (exit={exit_code}, {elapsed}s)")
 
     # 6. Supabase Cloud Sync
     if not args.dry_run:
