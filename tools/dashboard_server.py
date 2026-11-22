@@ -9,6 +9,7 @@ FastAPI + WebSocket Desktop Server for Automated Account Creation
 
 import os
 import sys
+import re
 import json
 import time
 import asyncio
@@ -215,7 +216,7 @@ async def start_task(payload: Dict[str, Any]):
     return {"ok": True, "message": f"Started {active_task_name}"}
 
 
-async def run_subprocess_stream(cmd: List[str], platform: str):
+async def run_subprocess_stream(cmd: List[str], platform: str, identity_id: Optional[str] = None):
     global active_process, active_task_name
     await broadcast_log(f"Starting {platform.upper()} task...")
     await broadcast_log(f"Command: {' '.join(cmd[:3])} ...")
@@ -254,6 +255,16 @@ async def run_subprocess_stream(cmd: List[str], platform: str):
     except Exception as e:
         await broadcast_log(f"Process error: {e}")
     finally:
+        if identity_id:
+            try:
+                store = _identity_store()
+                rec = store.get(identity_id)
+                current = ((rec or {}).get("platforms") or {}).get(platform) or {}
+                if current.get("status") == "running":
+                    store.set_platform(identity_id, platform, "aborted",
+                                       note="dashboard: process ended without a terminal record")
+            except Exception:
+                pass
         active_process = None
         active_task_name = None
         for ws in list(connected_websockets):
@@ -431,11 +442,21 @@ def _proxy_check():
     return proxy_check
 
 
+def _run_identity_module():
+    tools_dir = str(PROJECT_ROOT / "tools")
+    if tools_dir not in sys.path:
+        sys.path.insert(0, tools_dir)
+    import run_identity  # noqa: E402
+    return run_identity
+
+
 @app.get("/api/identities")
 async def list_identities_endpoint():
     try:
         store = _identity_store()
-        return {"ok": True, "identities": store.list_identities(), "summary": store.summary()}
+        reaped = store.reap_stale_running()
+        return {"ok": True, "identities": store.list_identities(), "summary": store.summary(),
+                "reaped": reaped}
     except Exception as e:
         return {"ok": False, "error": str(e), "identities": [], "summary": {}}
 
@@ -464,26 +485,36 @@ async def set_identity_proxy_endpoint(identity_id: str, payload: Dict[str, Any])
     try:
         store = _identity_store()
         gate = _proxy_check()
+        runmod = _run_identity_module()
         rec = store.get(identity_id) or store.find_by_email(identity_id)
         if not rec:
             raise HTTPException(status_code=404, detail="identity not found")
         proxy = (payload.get("proxy") or "").strip()
         if not proxy:
             raise HTTPException(status_code=400, detail="proxy is required")
-        proxy = proxy.replace("http://", "").replace("https://", "")
+        proxy = re.sub(r"^(https?|socks5)://", "", proxy, flags=re.I)
+
+        require_country = (payload.get("require_country") or gate.REQUIRE_COUNTRY).upper()
+        rotate = bool(payload.get("rotate", True))
+        nonce = int(rec.get("session_nonce") or 0) + (1 if rotate else 0)
+        effective = runmod.ensure_sticky_proxy(proxy, rec["identity_id"], require_country, nonce)
+
         if payload.get("verify", True):
-            result = gate.check_proxy(proxy, payload.get("require_country") or gate.REQUIRE_COUNTRY)
+            result = gate.check_proxy(effective, require_country)
             if not result["ok"]:
-                store.set_proxy(rec["identity_id"], proxy, result["ip"], result["country"],
+                store.set_proxy(rec["identity_id"], effective, result["ip"], result["country"],
                                 result["isp"], verified=False)
                 return {"ok": False, "rejected": True, "reasons": result["reasons"],
                         "ip": result["ip"], "country": result["country"], "isp": result["isp"]}
-            store.set_proxy(rec["identity_id"], proxy, result["ip"], result["country"],
-                            result["isp"], verified=True)
+            store.set_proxy(rec["identity_id"], effective, result["ip"], result["country"],
+                            result["isp"], verified=True, timezone=result["timezone"])
+            if rotate:
+                store.rotate_session(rec["identity_id"])
             return {"ok": True, "ip": result["ip"], "country": result["country"],
-                    "isp": result["isp"], "latency_ms": result["latency_ms"]}
-        store.set_proxy(rec["identity_id"], proxy)
-        return {"ok": True, "verified": False}
+                    "isp": result["isp"], "timezone": result["timezone"],
+                    "latency_ms": result["latency_ms"], "proxy": effective}
+        store.set_proxy(rec["identity_id"], effective)
+        return {"ok": True, "verified": False, "proxy": effective}
     except HTTPException:
         raise
     except Exception as e:
@@ -548,8 +579,10 @@ async def run_identity_endpoint(identity_id: str, payload: Dict[str, Any]):
         cmd.append("--skip-page")
     if payload.get("metricool_action"):
         cmd.extend(["--metricool-action", str(payload["metricool_action"])])
+    if payload.get("rotate_session"):
+        cmd.append("--rotate-session")
 
-    asyncio.create_task(run_subprocess_stream(cmd, platform))
+    asyncio.create_task(run_subprocess_stream(cmd, platform, rec["identity_id"]))
     return {"ok": True, "message": f"Started {active_task_name}", "identity_id": rec["identity_id"]}
 
 

@@ -145,9 +145,9 @@ def ensure_sticky_proxy(proxy: str, identity_id: str, require_country: str = "AU
     cc_match = re.search(r"-cc-([a-z]{2})", username, flags=re.I)
     existing_cc = cc_match.group(1).lower() if cc_match else ""
 
-    # Rebuild from the base username, discarding any pasted session token.
+    # Rebuild from the base username, discarding any pasted geo/session token.
     base = _strip_session(username)
-    base = re.sub(r"-cc-[a-z]{2}(?:-st-[a-z_]+)?", "", base, flags=re.I)
+    base = re.sub(r"-(?:cc-[a-z]{2}|st-[a-z_]+|city-[a-z_]+)(?=-|$)", "", base, flags=re.I)
 
     parts = [base]
     effective_country = ""
@@ -379,12 +379,15 @@ def main() -> int:
 
     # 1. Proxy gate.
     gate = None
+    gate_country = ""
     if args.skip_proxy_check:
         print("proxy gate : SKIPPED (--skip-proxy-check)")
+        cc = re.search(r"-cc-([a-z]{2})", proxy, flags=re.I)
+        gate_country = cc.group(1).upper() if cc else (record.get("proxy_country") or "")
         if not args.timezone:
             args.timezone = (
                 record.get("proxy_timezone")
-                or proxy_check.timezone_for_country(record.get("proxy_country", ""))["timezone"]
+                or proxy_check.timezone_for_country(gate_country)["timezone"]
             )
     else:
         gate = proxy_check.check_proxy(proxy, args.require_country)
@@ -412,6 +415,7 @@ def main() -> int:
             return 2
         if not args.timezone:
             args.timezone = gate["timezone"]
+        gate_country = gate["country"]
         print(f"timezone   : {args.timezone or '-'} (from verified exit IP)")
         if not args.dry_run:
             store.set_proxy(identity_id, proxy, gate["ip"], gate["country"], gate["isp"],
@@ -429,7 +433,7 @@ def main() -> int:
 
     # 2b. Coherence: a frozen persona from another country is the contradiction
     # that got shravyageorgeann433 flagged (IN proxy, America/Chicago browser).
-    proxy_country = (gate["country"] if gate else record.get("proxy_country", "")) or ""
+    proxy_country = (gate_country or record.get("proxy_country", "")) or ""
     persona_tz = read_persona_timezone(target)
     if persona_tz and proxy_country:
         persona_region = region_of_timezone(persona_tz)

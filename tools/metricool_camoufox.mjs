@@ -604,7 +604,7 @@ async function main() {
 
       const emailField = page.locator("input.v-field__input[name='email']");
       const passField = page.locator("input.v-field__input[name='password']");
-      const submitBtn = page.locator("button:has-text('Start for free')");
+      const submitBtn = page.locator("button:has-text('Get started for free'), button:has-text('started for free'), button:has-text('Start for free')");
 
       password = ensureMetricoolPasswordPolicy(password);
 
@@ -660,10 +660,14 @@ async function main() {
 
       // Verify button is enabled
       let btnState = await page.evaluate(() => {
-        const b = Array.from(document.querySelectorAll("button")).find(x => x.innerText.includes("Start for free"));
-        return { disabled: b?.disabled, classes: b?.className };
+        const b = Array.from(document.querySelectorAll("button")).find(x => 
+          x.innerText.toLowerCase().includes("started for free") || 
+          x.innerText.toLowerCase().includes("start for free") ||
+          x.type === "submit"
+        );
+        return { disabled: b?.disabled, text: b?.innerText };
       });
-      console.log(`[Camoufox] 'Start for free' button state: disabled=${btnState?.disabled}`);
+      console.log(`[Camoufox] Submit button state: disabled=${btnState?.disabled}, text='${btnState?.text?.trim()}'`);
       if (btnState?.disabled) {
         console.warn("[Camoufox] Button still disabled! Trying alternate click on checkbox label...");
         const label = page.locator(".v-checkbox label, label:has-text('Legal Terms')").first();
@@ -671,8 +675,12 @@ async function main() {
           await label.click({ force: true }).catch(() => { });
           await page.waitForTimeout(600);
           btnState = await page.evaluate(() => {
-            const b = Array.from(document.querySelectorAll("button")).find(x => x.innerText.includes("Start for free"));
-            return { disabled: b?.disabled, classes: b?.className };
+            const b = Array.from(document.querySelectorAll("button")).find(x => 
+              x.innerText.toLowerCase().includes("started for free") || 
+              x.innerText.toLowerCase().includes("start for free") ||
+              x.type === "submit"
+            );
+            return { disabled: b?.disabled, text: b?.innerText };
           });
           console.log(`[Camoufox] Retried button state: disabled=${btnState?.disabled}`);
         }
@@ -680,16 +688,13 @@ async function main() {
 
       await saveScreenshot(page, "metricool_03_checkbox_clicked.png");
 
-      console.log("[Camoufox] Submitting registration form ('Start for free')...");
+      console.log(`[Camoufox] Submitting registration form ('${btnState?.text?.trim() || "Get started for free"}')...`);
       if ((await submitBtn.count()) > 0) {
-        await submitBtn.click({ force: true }).catch(() => { });
+        await submitBtn.first().click({ force: true }).catch(() => { });
+      } else {
+        await page.keyboard.press("Enter");
       }
-      await page.keyboard.press("Enter");
-      await page.evaluate(() => {
-        const form = document.querySelector("form");
-        if (form) form.requestSubmit();
-      }).catch(() => { });
-      await page.waitForTimeout(5000);
+      await page.waitForTimeout(6000);
 
       await saveScreenshot(page, "metricool_04_submitted.png");
 

@@ -2,22 +2,39 @@
 setlocal
 cd /d "%~dp0"
 
-set "NODE_EXE=%LOCALAPPDATA%\Programs\NodeJS\node22\node.exe"
-if not exist "%NODE_EXE%" (
-    echo [ERROR] Node.js 22 not found at %NODE_EXE%
-    pause
+rem ===========================================================================
+rem  Instagram signup through the shared identity runner.
+rem
+rem  Usage:
+rem    run_instagram_signup.bat --identity <identity_id_or_email> [flags]
+rem
+rem  Examples:
+rem    run_instagram_signup.bat --identity hanijyra562
+rem    run_instagram_signup.bat --identity hanijyra562 --headless --skip-2fa
+rem
+rem  What changed:
+rem    * No credentials in this file any more. Mailbox comes from the identity store.
+rem    * No proxy in this file any more. The identity's proxy is verified first,
+rem      pinned to -cc-us, and given a stable sticky session.
+rem    * The old wu_...@unblock.oxylabs.io Web Unblocker is gone: it is a
+rem      scraping product, it returns 401, and Meta rejects its IPs.
+rem ===========================================================================
+
+set "PY_EXE=%~dp0.venv\Scripts\python.exe"
+if not exist "%PY_EXE%" set "PY_EXE=python"
+
+if "%~1"=="" (
+    echo Usage: run_instagram_signup.bat --identity ^<identity_id_or_email^> [flags]
+    echo.
+    echo The proxy and mailbox are read from the identity store, not from this file.
+    echo Create an identity in the dashboard first, then run:
+    echo     run_instagram_signup.bat --identity your_identity_id
     exit /b 1
 )
 
-set "ACCOUNT=AuLumb3394@outlook.com|dlfsznt6597|M.C537_SN1.0.U.MsaArtifacts.-CoqUbMi5MaM6LhmwsGRPSGcmu*24lfZRS9oo3m28eVwsZnbBEny6!jlBk6Ccdt!Mm90J7qJqxjZqiYrpFnyOL20FKALur1REvd8bDENSBFtWbJ7KHJh6f3kzCkpy8K9ilXkd7I9n*2iNkj7MTLnTxxd7trV!XmAbjwtIt!3Mp1oW*3C5lEqv0IWwxp*CvfM7aZz77KgtbengvgitepAnomwfpN1r6FThpeELEP!xi3AaRwnNBkJRe3YygfGEzmZcuJlGIAuEl9Ocb!eQiSSK9uAO2lHJdqeQ4dQgFP7C3wKKhx2s9Bh00Kx5ky9lT6pbo*gtp4lsi6jNr*XZHKgYRH65fv!oOM676t0v7faeMugGdi57yYU49p93otH60ED2d5cxDEpsQHo5Fbk4!VNqVSgzCCKjvmCnFbFl5G7aZWxM2aNRghAktcQHrajmIFphaQ$$|9e5f94bc-e8a4-4e73-b8be-63364c29d753"
-set "PROXY=wu_ddfbe3f8:4mS8mKr=+iiA@unblock.oxylabs.io:60000"
-
 echo ==============================================================
-echo   Running Instagram Account Creator (Camoufox Node.js)
-echo   Account: AuLumb3394@outlook.com
-echo   Proxy: %PROXY%
+echo   Instagram signup via identity runner
 echo ==============================================================
-
-"%NODE_EXE%" --experimental-sqlite tools/instagram_signup_camoufox.mjs --account "%ACCOUNT%" --proxy "%PROXY%" %*
+"%PY_EXE%" tools\run_identity.py --platform instagram %*
 
 endlocal

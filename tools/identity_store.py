@@ -301,6 +301,42 @@ def list_identities() -> List[Dict[str, Any]]:
     return sorted(_read(), key=lambda r: str(r.get("updated_at", "")), reverse=True)
 
 
+def reap_stale_running(max_age_minutes: int = 180) -> int:
+    """Close platform runs stuck in 'running' because the process was killed.
+
+    A run is 'stale' when its last status update is older than max_age_minutes.
+    This is what stops the dashboard showing a permanently 'running' row after
+    a crash, Stop button, or closed laptop.
+    """
+    from datetime import timedelta
+
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)
+    records = _read()
+    reaped = 0
+    for rec in records:
+        changed = False
+        for platform, pdata in (rec.get("platforms") or {}).items():
+            pdata = pdata or {}
+            if pdata.get("status") != "running":
+                continue
+            at = pdata.get("at")
+            try:
+                when = datetime.fromisoformat(str(at).replace("Z", "+00:00")) if at else None
+            except Exception:
+                when = None
+            if when is None or when < cutoff:
+                pdata["status"] = "aborted"
+                pdata["note"] = "stale: no terminal record (process killed or crashed)"
+                changed = True
+                reaped += 1
+        if changed:
+            rec["updated_at"] = _now()
+            rec["state"] = derive_state(rec)
+    if reaped:
+        _write(records)
+    return reaped
+
+
 def summary() -> Dict[str, Any]:
     records = _read()
     counts = {"total": len(records), "new": 0, "active": 0, "complete": 0, "failed": 0, "discarded": 0}

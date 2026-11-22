@@ -254,8 +254,8 @@ def register_metricool_account(
                     pass
 
             # Click Submit Button
-            submit_btn = page.locator("button:has-text('Start for free')").first
-            logger.info("Submitting registration form ('Start for free')...")
+            submit_btn = page.locator("button:has-text('Get started for free'), button:has-text('started for free'), button:has-text('Start for free')").first
+            logger.info("Submitting registration form ('Get started for free')...")
             try:
                 submit_btn.click(force=True)
             except Exception:

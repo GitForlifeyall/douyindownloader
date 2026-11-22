@@ -238,6 +238,8 @@ def collect() -> Dict[str, Dict[str, Any]]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Import existing accounts into the identity store")
     parser.add_argument("--dry-run", action="store_true", help="Print the plan, write nothing")
+    parser.add_argument("--update", action="store_true",
+                        help="also overwrite identities that already exist (default: create only)")
     args = parser.parse_args()
 
     merged = collect()
@@ -246,7 +248,7 @@ def main() -> int:
         return 0
 
     existing = {str(r.get("email", "")).lower() for r in store.list_identities()}
-    created = updated = 0
+    created = updated = skipped = 0
 
     rows = []
     for key, item in sorted(merged.items()):
@@ -258,6 +260,9 @@ def main() -> int:
         state_hint = "new" if not platforms else "imported"
         rows.append((item["email"], marks, item.get("legacy_profile_dirs") or [], state_hint))
         if args.dry_run:
+            continue
+        if key in existing and not args.update:
+            skipped += 1
             continue
         fields: Dict[str, Any] = {
             "account_string": item.get("account_string") or "",
@@ -285,7 +290,7 @@ def main() -> int:
     if args.dry_run:
         print(f"\n[dry-run] would create/update {len(rows)} identities")
     else:
-        print(f"\nDone. created={created} updated={updated} total={len(merged)}")
+        print(f"\nDone. created={created} updated={updated} skipped={skipped} total={len(merged)}")
         print(f"Store: {store.IDENTITIES_FILE}")
         print(json.dumps(store.summary(), indent=2))
     return 0

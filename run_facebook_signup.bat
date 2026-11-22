@@ -2,21 +2,39 @@
 setlocal
 cd /d "%~dp0"
 
-set "NODE_EXE=%LOCALAPPDATA%\Programs\NodeJS\node22\node.exe"
-if not exist "%NODE_EXE%" (
-    echo [ERROR] Node.js 22 not found at %NODE_EXE%
-    pause
+rem ===========================================================================
+rem  Facebook signup through the shared identity runner.
+rem
+rem  Usage:
+rem    run_facebook_signup.bat --identity <identity_id_or_email> [flags]
+rem
+rem  Examples:
+rem    run_facebook_signup.bat --identity hanijyra562
+rem    run_facebook_signup.bat --identity hanijyra562 --headless --skip-2fa
+rem
+rem  What changed:
+rem    * No credentials in this file any more. Mailbox comes from the identity store.
+rem    * No proxy in this file any more. The identity's proxy is verified first,
+rem      pinned to -cc-us, and given a stable sticky session.
+rem    * The old wu_...@unblock.oxylabs.io Web Unblocker is gone: it is a
+rem      scraping product, it returns 401, and Meta rejects its IPs.
+rem ===========================================================================
+
+set "PY_EXE=%~dp0.venv\Scripts\python.exe"
+if not exist "%PY_EXE%" set "PY_EXE=python"
+
+if "%~1"=="" (
+    echo Usage: run_facebook_signup.bat --identity ^<identity_id_or_email^> [flags]
+    echo.
+    echo The proxy and mailbox are read from the identity store, not from this file.
+    echo Create an identity in the dashboard first, then run:
+    echo     run_facebook_signup.bat --identity your_identity_id
     exit /b 1
 )
 
-set "ACCOUNT=shravyageorgeann433@outlook.in|dnjnludzb7|M.C521_SN1.0.U.MsaArtifacts.-ClQn*FgnkFcArCA4rzy*1u7dy58f3uIWIp2IkNaxcX5LNse6yO2AdHK41lhshg2STuPFqkXFPLkhWYQynJWMp09bzKPmsv6*m9m8aOjppZ9dZb5dt12j5KdaXjfxzrxA*DzWC65kI9AMFnIX4fOVSgLcO4H2sPz2VxPuM!voM3to!46NkKv8DY4uEhd!dq2WOKfGpde6Oe!IG0ZnLFmouCkP4mraa6d0JKKI3lg3S!TEYQCA2m!ZLpEEMmMTQQh8*kFNchHSCioud84uUvqipHZGHDZCDfwPT6UxbzmN0n7OqGtUCRrMhrszbge2AG7msFDoBJ4s7Rc8OQdL3QmXiBlYLYlNuYQGRtfGi4TfRvH8aYSJ!13AnfnEoXPBwKb3Hg$|9e5f94bc-e8a4-4e73-b8be-63364c29d753"
-set "PROXY=customer-resi_66c2a9b7-cc-in-city-ahmedabad:oMw6GpW~=ghV@pr.oxylabs.io:7777"
-
 echo ==============================================================
-echo   Running Facebook Account Creator (Camoufox Node.js)
-echo   Proxy: %PROXY%
+echo   Facebook signup via identity runner
 echo ==============================================================
-
-"%NODE_EXE%" --experimental-sqlite tools/facebook_signup_camoufox.mjs --account "%ACCOUNT%" --proxy "%PROXY%" %*
+"%PY_EXE%" tools\run_identity.py --platform facebook %*
 
 endlocal
