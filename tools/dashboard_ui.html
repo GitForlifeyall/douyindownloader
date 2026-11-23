@@ -173,10 +173,17 @@
             <i class="fa-solid fa-play text-indigo-400"></i>
             <span>Launch Pipeline</span>
           </label>
-          <label class="flex items-center space-x-2 cursor-pointer text-xs text-slate-400">
-            <input type="checkbox" id="headlessToggle" class="rounded bg-slate-800 border-slate-700 text-blue-500 focus:ring-0">
-            <span>Headless (Background)</span>
-          </label>
+          <div class="flex items-center space-x-3">
+            <label class="flex items-center space-x-1.5 cursor-pointer text-xs text-amber-300/90 font-medium hover:text-amber-200 transition" title="Skip typing cadence delays and cursor trajectory path for fast execution">
+              <input type="checkbox" id="fastToggle" class="rounded bg-slate-800 border-amber-600/50 text-amber-500 focus:ring-0">
+              <i class="fa-solid fa-bolt text-[11px] text-amber-400"></i>
+              <span>Fast (Skip Delays/Trajectory)</span>
+            </label>
+            <label class="flex items-center space-x-1.5 cursor-pointer text-xs text-slate-400 hover:text-slate-300 transition">
+              <input type="checkbox" id="headlessToggle" class="rounded bg-slate-800 border-slate-700 text-blue-500 focus:ring-0">
+              <span>Headless</span>
+            </label>
+          </div>
         </div>
 
         <div class="grid grid-cols-3 gap-2 pt-1">
@@ -199,6 +206,11 @@
         <button onclick="startTask('combo')" class="w-full py-2.5 rounded-lg bg-gradient-to-r from-blue-600/30 via-indigo-600/30 to-teal-600/30 hover:from-blue-600/40 hover:via-indigo-600/40 hover:to-teal-600/40 border border-indigo-500/40 text-white font-semibold text-xs flex items-center justify-center space-x-2 transition shadow-lg shadow-indigo-950/50">
           <i class="fa-solid fa-layer-group text-indigo-400"></i>
           <span>Create FB + Metricool (Merged Session)</span>
+        </button>
+
+        <button onclick="startFastTest()" class="w-full py-2 rounded-lg bg-gradient-to-r from-amber-600/20 via-orange-600/20 to-amber-600/20 hover:from-amber-600/30 hover:via-orange-600/30 hover:to-amber-600/30 border border-amber-500/30 text-amber-300 font-medium text-xs flex items-center justify-center space-x-2 transition">
+          <i class="fa-solid fa-bolt text-amber-400"></i>
+          <span>Run Fast FB + Metricool Benchmark Test</span>
         </button>
 
         <button onclick="stopTask()" class="w-full py-2.5 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 border border-red-500/30 text-xs font-semibold flex items-center justify-center space-x-2 transition">
@@ -492,15 +504,16 @@
       const account = rawAcc.value.trim();
       const proxy = document.getElementById("proxyInput").value.trim();
       const headless = document.getElementById("headlessToggle").checked;
+      const fast = document.getElementById("fastToggle") ? document.getElementById("fastToggle").checked : false;
 
-      appendLog(`[LAUNCH] Dispatching ${platform.toUpperCase()} registration...`, "text-indigo-400");
-      setTaskRunning(true, platform.toUpperCase());
+      appendLog(`[LAUNCH] Dispatching ${platform.toUpperCase()} registration${fast ? " [FAST MODE]" : ""}...`, "text-indigo-400");
+      setTaskRunning(true, `${platform.toUpperCase()}${fast ? " (FAST)" : ""}`);
 
       try {
         const res = await fetch("/api/start-task", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ platform, account, proxy, headless })
+          body: JSON.stringify({ platform, account, proxy, headless, fast })
         });
         const data = await res.json();
         if (!data.ok) {
@@ -522,6 +535,32 @@
         setTaskRunning(false);
       } catch(err) {
         appendLog(`[STOP ERROR] ${err.message}`, "text-red-400");
+      }
+    }
+
+    async function startFastTest() {
+      const proxy = document.getElementById("proxyInput").value.trim();
+      const headless = document.getElementById("headlessToggle").checked;
+      const email = (document.getElementById("targetEmail")?.value || "").trim();
+      const password = document.getElementById("targetPassword")?.value || "";
+
+      appendLog("[LAUNCH] Dispatching Fast FB + Metricool Benchmark (Zero Delays, Zero Trajectory)...", "text-amber-400");
+      setTaskRunning(true, "FAST BENCHMARK");
+
+      try {
+        const res = await fetch("/api/run-fast-test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ proxy, headless, email, password })
+        });
+        const data = await res.json();
+        if (!data.ok) {
+          appendLog(`[ERROR] ${data.detail || data.message}`, "text-red-400");
+          setTaskRunning(false);
+        }
+      } catch(err) {
+        appendLog(`[ERROR] ${err.message}`, "text-red-400");
+        setTaskRunning(false);
       }
     }
 
@@ -711,11 +750,12 @@
 
     async function runIdentity(id, platform) {
       const headless = document.getElementById("headlessToggle").checked;
+      const fast = document.getElementById("fastToggle") ? document.getElementById("fastToggle").checked : false;
       try {
         const res = await fetch(`/api/identities/${encodeURIComponent(id)}/run`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ platform, headless })
+          body: JSON.stringify({ platform, headless, fast })
         });
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || data.detail || "run failed");

@@ -265,6 +265,8 @@ def build_command(record: Dict[str, Any], platform: str, profile_dir: Path,
             cmd += ["--skip-page"]
         if args.skip_warmup:
             cmd += ["--skip-warmup"]
+        if getattr(args, "fast", False):
+            cmd += ["--fast"]
     else:  # metricool
         cmd += ["--action", args.metricool_action, "--email", email]
         if password:
@@ -280,6 +282,8 @@ def build_command(record: Dict[str, Any], platform: str, profile_dir: Path,
             cmd += ["--exit-ip", exit_ip]
         if args.headless:
             cmd += ["--headless"]
+        if getattr(args, "fast", False):
+            cmd += ["--fast"]
 
     display = {}
     if record.get("account_string"):
@@ -343,6 +347,7 @@ def main() -> int:
     parser.add_argument("--rotate-session", action="store_true",
                         help="force a new sticky session (new exit IP) for this identity")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--fast", "--skip-delays", dest="fast", action="store_true", help="skip typing delays and cursor trajectories for fast testing")
     args = parser.parse_args()
 
     try:

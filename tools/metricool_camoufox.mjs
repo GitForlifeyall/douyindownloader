@@ -550,17 +550,26 @@ export async function runMetricoolSignUpFlow(page, context, options = {}) {
 
   flowPassword = ensureMetricoolPasswordPolicy(flowPassword);
 
+  const isFast = hasFlag("--fast") || hasFlag("--skip-delays") || hasFlag("--no-trajectory") || options.fast;
   await emailField.waitFor({ state: "visible", timeout: 35000 });
   console.log(`[Camoufox] Entering signup credentials for: ${flowEmail}...`);
   await emailField.click({ force: true }).catch(() => emailField.focus());
-  await emailField.fill("");
-  await page.keyboard.type(flowEmail, { delay: 40 });
-  await page.waitForTimeout(300);
+  if (isFast) {
+    await emailField.fill(flowEmail);
+  } else {
+    await emailField.fill("");
+    await page.keyboard.type(flowEmail, { delay: 40 });
+    await page.waitForTimeout(300);
+  }
 
   await passField.click({ force: true }).catch(() => passField.focus());
-  await passField.fill("");
-  await page.keyboard.type(flowPassword, { delay: 50 });
-  await page.waitForTimeout(500);
+  if (isFast) {
+    await passField.fill(flowPassword);
+  } else {
+    await passField.fill("");
+    await page.keyboard.type(flowPassword, { delay: 50 });
+    await page.waitForTimeout(500);
+  }
 
   // Verify no password validation warning
   const errorMsg = page.locator(".v-messages__message, .v-input--error");
@@ -808,7 +817,7 @@ async function main() {
     user_data_dir: profileDir,
     headless: headless,
     os: "windows",
-    humanize: true,
+    humanize: (hasFlag("--fast") || hasFlag("--skip-delays") || hasFlag("--no-trajectory")) ? false : true,
     block_webrtc: true,
     iKnowWhatImDoing: true,
     locale: `${chosenLang}-${chosenRegion}`,

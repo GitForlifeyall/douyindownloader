@@ -21,6 +21,12 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MODEL_PATH = path.join(__dirname, "models", "cursor_trajectory.onnx");
 
+// Check if fast mode was requested via CLI flags
+export const IS_FAST_MODE = process.argv.includes("--fast") ||
+  process.argv.includes("--no-trajectory") ||
+  process.argv.includes("--skip-delays") ||
+  process.argv.includes("--no-humanize");
+
 let ort = null;
 let onnxSession = null;
 let onnxLoadAttempted = false;
@@ -287,6 +293,12 @@ export async function humanGlide(page, targetX, targetY, options = {}) {
       y: clamp(Math.round(targetY), 2, vp.height - 2),
     };
 
+    if (IS_FAST_MODE || options.fast) {
+      setMousePosition(page, safeTarget.x, safeTarget.y);
+      await page.mouse.move(safeTarget.x, safeTarget.y).catch(() => {});
+      return;
+    }
+
     const path = await generateKinematicPath(currentPos, safeTarget, options);
     for (const pt of path) {
       await page.mouse.move(pt.x, pt.y);
@@ -307,6 +319,14 @@ export async function humanGlide(page, targetX, targetY, options = {}) {
  * Click an element or locator with full human kinematic fidelity.
  */
 export async function humanClick(page, target, options = {}) {
+  if (IS_FAST_MODE || options.fast) {
+    const loc = typeof target === "string" ? page.locator(target).first() : target;
+    await loc.scrollIntoViewIfNeeded().catch(() => {});
+    await loc.click({ force: true }).catch(async () => {
+      await loc.dispatchEvent("click").catch(() => {});
+    });
+    return;
+  }
   try {
     const locator = typeof target === "string" ? page.locator(target).first() : target;
     await locator.waitFor({ state: "visible", timeout: options.timeout || 10000 });
@@ -356,6 +376,11 @@ export async function humanClick(page, target, options = {}) {
  * Hover over an element with smooth human kinematic glide.
  */
 export async function humanHover(page, target, options = {}) {
+  if (IS_FAST_MODE || options.fast) {
+    const loc = typeof target === "string" ? page.locator(target).first() : target;
+    await loc.hover().catch(() => {});
+    return;
+  }
   try {
     const locator = typeof target === "string" ? page.locator(target).first() : target;
     await locator.waitFor({ state: "visible", timeout: options.timeout || 8000 });
@@ -386,6 +411,7 @@ export async function humanHover(page, target, options = {}) {
  * Natural cursor wander / drift across the screen to simulate reading eyes.
  */
 export async function humanWander(page, options = {}) {
+  if (IS_FAST_MODE || options.fast) return;
   try {
     const vp = page.viewportSize() || { width: 1280, height: 800 };
     const cur = getMousePosition(page);

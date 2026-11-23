@@ -210,6 +210,8 @@ async def start_task(payload: Dict[str, Any]):
         cmd.extend(["--proxy", proxy_str])
     if headless:
         cmd.append("--headless")
+    if payload.get("fast"):
+        cmd.append("--fast")
 
     # Start subprocess in background
     asyncio.create_task(run_subprocess_stream(cmd, platform))
@@ -573,6 +575,8 @@ async def run_identity_endpoint(identity_id: str, payload: Dict[str, Any]):
         cmd.extend(["--proxy", str(payload["proxy"]).strip()])
     if payload.get("headless"):
         cmd.append("--headless")
+    if payload.get("fast"):
+        cmd.append("--fast")
     if payload.get("skip_2fa"):
         cmd.append("--skip-2fa")
     if payload.get("skip_page"):
@@ -584,6 +588,40 @@ async def run_identity_endpoint(identity_id: str, payload: Dict[str, Any]):
 
     asyncio.create_task(run_subprocess_stream(cmd, platform, rec["identity_id"]))
     return {"ok": True, "message": f"Started {active_task_name}", "identity_id": rec["identity_id"]}
+
+
+@app.post("/api/run-fast-test")
+async def run_fast_test(payload: Dict[str, Any] = None):
+    global active_process, active_task_name
+    if active_process is not None and active_process.returncode is None:
+        raise HTTPException(status_code=400, detail="Another task is already running. Please stop it first.")
+
+    payload = payload or {}
+    proxy_str = payload.get("proxy", "").strip()
+    headless = payload.get("headless", False)
+
+    active_task_name = "FAST BENCHMARK (FB + Metricool)"
+    node_binary = NODE_EXE if Path(NODE_EXE).exists() else "node"
+    cmd = [
+        node_binary,
+        "--experimental-sqlite",
+        str(PROJECT_ROOT / "tools" / "test_fb_metricool_fast.mjs"),
+    ]
+    if proxy_str:
+        cmd.extend(["--proxy", proxy_str])
+    elif payload.get("no_proxy"):
+        cmd.append("--no-proxy")
+    if headless:
+        cmd.append("--headless")
+    email = (payload.get("email") or "").strip()
+    password = payload.get("password") or ""
+    if email:
+        cmd.extend(["--email", email])
+    if password:
+        cmd.extend(["--password", password])
+
+    asyncio.create_task(run_subprocess_stream(cmd, "fast-test"))
+    return {"ok": True, "message": f"Started {active_task_name}"}
 
 
 @app.websocket("/ws/logs")

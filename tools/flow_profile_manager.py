@@ -159,7 +159,11 @@ def launch_profile(profile_name: str, url: str = "https://flow.google.com/") -> 
     print("3. You can close or leave the browser open anytime; your profile is fully preserved.")
     print("=" * 65)
 
-    subprocess.Popen(cmd)
+    creation_flags = 0
+    if sys.platform == "win32":
+        creation_flags = getattr(subprocess, "DETACHED_PROCESS", 0x00000008) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+
+    subprocess.Popen(cmd, creationflags=creation_flags, close_fds=True)
 
 
 def list_profiles() -> None:

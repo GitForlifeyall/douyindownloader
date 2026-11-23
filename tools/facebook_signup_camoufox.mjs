@@ -129,6 +129,7 @@ const skipPage = hasFlag("--skip-page");
 const skip2fa = hasFlag("--skip-2fa");
 const keepProfile = hasFlag("--resume") || hasFlag("--keep");
 const isCombo = hasFlag("--combo") || hasFlag("--then-metricool") || hasFlag("--merged");
+const fastMode = hasFlag("--fast") || hasFlag("--skip-delays") || hasFlag("--no-trajectory") || hasFlag("--no-humanize");
 
 const REGISTERED_ACCOUNTS_FILE = path.resolve("output", "facebook_registered_accounts.json");
 const RISK_LOG_FILE = path.resolve("output", "facebook_risk_log.json");
@@ -637,6 +638,20 @@ function gaussianDelay(mean = 38, stdDev = 12) {
 
 async function humanType(page, locator, text, options = {}) {
   const element = typeof locator.first === "function" ? locator.first() : locator;
+  if (fastMode || options.fast) {
+    await element.scrollIntoViewIfNeeded().catch(() => { });
+    await humanClick(page, element).catch(() => {
+      if (typeof element.click === "function") return element.click({ force: true }).catch(() => { });
+    });
+    if (typeof element.fill === "function") {
+      await element.fill(text).catch(() => { });
+    } else if (typeof element.type === "function") {
+      await element.type(text, { delay: 0 }).catch(() => { });
+    } else {
+      await page.keyboard.insertText(text).catch(() => { });
+    }
+    return;
+  }
   await humanClick(page, element).catch(() => {
     if (typeof element.click === "function") return element.click().catch(() => { });
   });
@@ -1280,45 +1295,98 @@ function saveRegisteredAccount(record) {
 // ----------------------------------------------------
 // Robust Birthday & Gender Combobox Selector
 // ----------------------------------------------------
-async function selectCustomCombobox(page, name, locator, regex) {
-  let box = locator.first();
-  if ((await box.count()) === 0 || !(await box.isVisible().catch(() => false))) {
+async function selectCustomCombobox(page, name, locator, regex, fallbackIndex = null, keywords = []) {
+  console.log(`[Facebook] Locating combobox for '${name}'...`);
+
+  // Close any lingering popover from previous selection
+  await page.keyboard.press("Escape").catch(() => { });
+  await page.waitForTimeout(200);
+
+  const searchWords = [name, ...keywords];
+  const selectorParts = [];
+  for (const w of searchWords) {
+    selectorParts.push(`[aria-haspopup='listbox'][aria-label*='${w}' i]`);
+    selectorParts.push(`[aria-haspopup='listbox']:has-text('${w}')`);
+    selectorParts.push(`[role='combobox'][aria-label*='${w}' i]`);
+    selectorParts.push(`[role='combobox']:has-text('${w}')`);
+  }
+
+  let box = page.locator(selectorParts.join(", ")).first();
+  if ((await box.count()) === 0 && locator) {
+    box = locator.first();
+  }
+  if ((await box.count()) === 0 && fallbackIndex !== null) {
+    const allBoxes = page.locator("[aria-haspopup='listbox'], [role='combobox']");
+    if ((await allBoxes.count()) > fallbackIndex) {
+      console.log(`[Facebook] Using positional fallback (index ${fallbackIndex}) for ${name}...`);
+      box = allBoxes.nth(fallbackIndex);
+    }
+  }
+
+  let clickedOpen = false;
+  try {
+    if ((await box.count()) > 0) {
+      await box.waitFor({ state: "attached", timeout: 4000 });
+      await box.scrollIntoViewIfNeeded().catch(() => { });
+      await humanClick(page, box).catch(() => box.click({ force: true }));
+      clickedOpen = true;
+    }
+  } catch (e) { }
+
+  if (!clickedOpen) {
+    // DOM-level click fallback for maximum resilience
+    console.log(`[Facebook] Trying DOM evaluation trigger for '${name}'...`);
+    clickedOpen = await page.evaluate(({ searchWords, fallbackIndex }) => {
+      const triggers = Array.from(document.querySelectorAll("[aria-haspopup='listbox'], [role='combobox']"));
+      for (const t of triggers) {
+        const label = (t.getAttribute("aria-label") || "").toLowerCase();
+        const text = (t.innerText || "").toLowerCase();
+        for (const w of searchWords) {
+          const wl = w.toLowerCase();
+          if (label.includes(wl) || text.includes(wl)) {
+            t.scrollIntoView();
+            t.click();
+            return true;
+          }
+        }
+      }
+      if (fallbackIndex !== null && triggers[fallbackIndex]) {
+        triggers[fallbackIndex].scrollIntoView();
+        triggers[fallbackIndex].click();
+        return true;
+      }
+      return false;
+    }, { searchWords, fallbackIndex });
+  }
+
+  if (!clickedOpen) {
+    console.warn(`[Facebook] Combobox trigger for ${name} not found in DOM.`);
     return false;
   }
 
-  const optionSelector = "[role='option'], [role='menuitemradio'], [role='menuitem'], [role='listbox'] [tabindex], [role='listbox'] div:visible, div[role='dialog'] [role='option'], div[role='dialog'] [role='menuitemradio']";
+  await page.waitForTimeout(400);
 
-  // Check if dropdown popup is already open from user interaction
-  let opt = page.locator(optionSelector).filter({ hasText: regex }).first();
-  if ((await opt.count()) === 0 || !(await opt.isVisible().catch(() => false))) {
-    await humanClick(page, box).catch(() => box.click({ force: true }));
-    await page.waitForTimeout(350 + Math.random() * 150);
-    opt = page.locator(optionSelector).filter({ hasText: regex }).first();
-  }
-
-  if ((await opt.count()) > 0) {
-    await opt.scrollIntoViewIfNeeded().catch(() => { });
-    await humanClick(page, opt).catch(() => opt.click({ force: true }));
-    await page.waitForTimeout(300 + Math.random() * 150);
-    const txt = (await box.innerText().catch(() => "")).trim();
-    console.log(`[Facebook] Set ${name} to: '${txt.replace(/\n/g, " - ")}'`);
-    return true;
-  }
-
-  // Fallback: iterate all options if exact filter was hidden
-  const allOpts = page.locator(optionSelector);
-  const optCount = await allOpts.count();
-  for (let j = 0; j < optCount; j++) {
-    const item = allOpts.nth(j);
-    const text = (await item.innerText().catch(() => "")).trim();
-    if (regex.test(text) || (text && regex.test(text.split("\n")[0].trim()))) {
-      await item.scrollIntoViewIfNeeded().catch(() => { });
-      await humanClick(page, item).catch(() => item.click({ force: true }));
-      await page.waitForTimeout(300 + Math.random() * 150);
-      const txt = (await box.innerText().catch(() => "")).trim();
-      console.log(`[Facebook] Set ${name} via scroll to: '${txt.replace(/\n/g, " - ")}'`);
-      return true;
+  // Pick option directly inside page.evaluate for 100% selector reliability
+  const pattern = typeof regex === "string" ? regex : (regex.source || String(regex));
+  const picked = await page.evaluate(({ pattern }) => {
+    const reg = new RegExp(pattern, "i");
+    const opts = Array.from(document.querySelectorAll("[role='option'], [role='menuitemradio'], [role='menuitem'], [role='listbox'] div, div[role='option']"));
+    for (const opt of opts) {
+      const txt = (opt.innerText || opt.textContent || "").trim();
+      if (!txt) continue;
+      if (reg.test(txt)) {
+        opt.scrollIntoView();
+        opt.click();
+        return { clicked: true, text: txt };
+      }
     }
+    return { clicked: false };
+  }, { pattern });
+
+  if (picked.clicked) {
+    console.log(`[Facebook] Set ${name} to: '${picked.text}'`);
+    await page.waitForTimeout(350);
+    return true;
   }
 
   console.warn(`[Facebook] Warning: Option matching ${regex} for ${name} not found.`);
@@ -1327,12 +1395,23 @@ async function selectCustomCombobox(page, name, locator, regex) {
 
 // ----------------------------------------------------
 // Specialized Facebook Gender Selector
-// Handles Combobox / Dropdowns ("Select your gender"),
+// Handles Combobox / Dropdowns ("Select your gender" / "अपना लिंग चुनें"),
 // native HTML <select>, and radio buttons with post-validation.
 // CRITICAL: Strictly forbids "Custom" selection under all circumstances.
 // ----------------------------------------------------
 async function selectFacebookGender(page, targetGender) {
   console.log(`[Facebook] Selecting Gender: ${targetGender} (Strictly prohibiting Custom)...`);
+
+  await page.keyboard.press("Escape").catch(() => { });
+  await page.waitForTimeout(200);
+
+  // Wait for gender control to exist in DOM (English, Hindi, or native select)
+  await page.waitForFunction(() => {
+    if (document.querySelector("select[name='sex']")) return true;
+    return Array.from(document.querySelectorAll("[aria-haspopup='listbox'], [role='combobox']")).some((b) =>
+      /select your gender|gender|लिंग|अपना लिंग/i.test(b.innerText || "") || /gender|लिंग/i.test(b.getAttribute("aria-label") || ""));
+  }, null, { timeout: 10000 }).catch(() => { });
+
   const isFemale = targetGender.toLowerCase() === "female";
 
   // Check 1: Native HTML <select name='sex'>
@@ -1353,114 +1432,87 @@ async function selectFacebookGender(page, targetGender) {
     return true;
   }
 
-  // Check 3: Label click fallback for radio buttons
-  const labelBtn = page.locator(`label:has-text('${targetGender}')`).first();
+  // Check 3: Modern React Combobox / Dropdown ("Select your gender" / "अपना लिंग चुनें")
+  const targetOptionRegexStr = isFemale ? "^(?:female|महिला|स्त्री|महिलाएँ|સ્ત્રી)$" : "^(?:male|पुरुष|पुरूष|પુરુષ)$";
+
+  // Look for gender trigger by text, aria-label, or 4th combobox position (index 3)
+  const genderSelectors = [
+    "[aria-haspopup='listbox']:has-text('लिंग')",
+    "[aria-haspopup='listbox']:has-text('अपना लिंग')",
+    "[aria-haspopup='listbox']:has-text('gender')",
+    "[aria-haspopup='listbox'][aria-label*='लिंग' i]",
+    "[aria-haspopup='listbox'][aria-label*='gender' i]",
+    "[role='combobox']:has-text('लिंग')",
+    "[role='combobox']:has-text('gender')",
+    "[role='combobox'][aria-label*='लिंग' i]",
+    "[role='combobox'][aria-label*='gender' i]",
+  ];
+  let genderBox = page.locator(genderSelectors.join(", ")).first();
+
+  let clickedOpen = false;
+  if ((await genderBox.count()) > 0) {
+    try {
+      await genderBox.scrollIntoViewIfNeeded().catch(() => { });
+      await humanClick(page, genderBox).catch(() => genderBox.click({ force: true }));
+      clickedOpen = true;
+    } catch (e) { }
+  }
+
+  // Fallback: DOM query for gender trigger (contains "लिंग" or "gender" or is the 4th trigger on the page)
+  if (!clickedOpen) {
+    console.log("[Facebook] Trying DOM evaluation trigger for Gender...");
+    clickedOpen = await page.evaluate(() => {
+      const triggers = Array.from(document.querySelectorAll("[aria-haspopup='listbox'], [role='combobox']"));
+      for (const t of triggers) {
+        const text = (t.innerText || "").toLowerCase();
+        const label = (t.getAttribute("aria-label") || "").toLowerCase();
+        if (text.includes("लिंग") || text.includes("gender") || label.includes("लिंग") || label.includes("gender")) {
+          t.scrollIntoView();
+          t.click();
+          return true;
+        }
+      }
+      // If 4 triggers exist (Month, Day, Year, Gender), index 3 is Gender
+      if (triggers.length >= 4) {
+        triggers[3].scrollIntoView();
+        triggers[3].click();
+        return true;
+      }
+      return false;
+    });
+  }
+
+  if (clickedOpen) {
+    await page.waitForTimeout(400);
+
+    const picked = await page.evaluate((pattern) => {
+      const reg = new RegExp(pattern, "i");
+      const opts = Array.from(document.querySelectorAll("[role='option'], [role='menuitemradio'], [role='menuitem'], [role='listbox'] div, div[role='option']"));
+      for (const opt of opts) {
+        const txt = (opt.innerText || opt.textContent || "").trim();
+        if (/custom|pronoun|कस्टम|अनुकूलित|other/i.test(txt)) continue;
+        if (reg.test(txt)) {
+          opt.scrollIntoView();
+          opt.click();
+          return { clicked: true, text: txt };
+        }
+      }
+      return { clicked: false };
+    }, targetOptionRegexStr);
+
+    if (picked.clicked) {
+      console.log(`[Facebook] Successfully set gender to: '${picked.text}'`);
+      await page.waitForTimeout(300);
+      return true;
+    }
+  }
+
+  // Check 4: Label click fallback for radio buttons
+  const labelBtn = page.locator(`label:has-text('${targetGender}'), label:has-text('${isFemale ? "महिला" : "पुरुष"}')`).first();
   if ((await labelBtn.count()) > 0 && (await labelBtn.isVisible().catch(() => false))) {
     await humanClick(page, labelBtn).catch(() => labelBtn.click({ force: true }));
     console.log(`[Facebook] Clicked gender label: ${targetGender}`);
     return true;
-  }
-
-  // Check 4: Modern React Combobox / Dropdown ("Select your gender")
-  const targetOptionRegex = isFemale ? /^(?:female|महिला|સ્ત્રી)$/i : /^(?:male|पुरुष|પુરુષ)$/i;
-
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    // 1. Locate the Gender dropdown trigger box in DOM and tag it
-    const triggerFound = await page.evaluate(() => {
-      const all = Array.from(document.querySelectorAll("div[role='combobox'], div[aria-haspopup='listbox'], [role='button'], div[tabindex='0'], span, div"));
-      for (const el of all) {
-        const t = (el.innerText || "").trim();
-        if (t === "Select your gender" || t === "Custom" || (t.startsWith("Select your gender") && t.length < 35)) {
-          const box = el.closest("[role='combobox'], [role='button'], div[aria-haspopup='listbox'], div[tabindex='0']") || el;
-          box.setAttribute("data-fb-gender-box", "true");
-          return { found: true, text: t };
-        }
-      }
-      const ariaBox = document.querySelector("[role='combobox'][aria-label*='gender' i], [aria-haspopup='listbox'][aria-label*='gender' i]");
-      if (ariaBox) {
-        ariaBox.setAttribute("data-fb-gender-box", "true");
-        return { found: true, text: (ariaBox.innerText || "").trim() };
-      }
-      return { found: false };
-    });
-
-    if (!triggerFound.found) {
-      console.warn(`[Facebook] Gender trigger box not found on attempt ${attempt}.`);
-      break;
-    }
-
-    const boxLocator = page.locator("[data-fb-gender-box='true']").first();
-    const currentBoxText = ((await boxLocator.innerText().catch(() => "")) || "").trim();
-    console.log(`[Facebook] Gender box state (Attempt ${attempt}): '${currentBoxText}'`);
-
-    // If already properly selected as Female or Male (and NOT Custom), we are done!
-    if (targetOptionRegex.test(currentBoxText) && !/custom|pronoun|कस्टम|કસ્ટમ|other/i.test(currentBoxText)) {
-      console.log(`[Facebook] Gender already correctly set to '${currentBoxText}'.`);
-      return true;
-    }
-
-    // Scroll into view and click the trigger box to open the popover
-    await boxLocator.scrollIntoViewIfNeeded().catch(() => { });
-    await page.waitForTimeout(150);
-    await humanClick(page, boxLocator).catch(() => boxLocator.click({ force: true }));
-    await page.waitForTimeout(400);
-
-    // 2. Click the desired option (Female or Male) inside the opened popover
-    const clickedInDom = await page.evaluate((isFemaleTarget) => {
-      const reg = isFemaleTarget ? /^(?:female|महिला|સ્ત્રી)$/i : /^(?:male|पुरुष|પુરુષ)$/i;
-      const options = Array.from(document.querySelectorAll("[role='option'], [role='menuitem'], [role='menuitemradio'], [role='listbox'] div, div[role='dialog'] [role='option'], li, div[tabindex='-1']"));
-      for (const opt of options) {
-        const txt = (opt.innerText || opt.textContent || "").trim();
-        // NEVER match Custom or Pronoun
-        if (/custom|pronoun|कस्टम|કસ્ટમ|other/i.test(txt)) continue;
-        if (reg.test(txt)) {
-          const rect = opt.getBoundingClientRect();
-          if (rect.width > 0 && rect.height > 0) {
-            opt.click();
-            return { clicked: true, text: txt };
-          }
-        }
-      }
-      return { clicked: false };
-    }, isFemale);
-
-    if (clickedInDom.clicked) {
-      console.log(`[Facebook] Successfully clicked gender option in DOM: '${clickedInDom.text}'`);
-    } else {
-      const optLoc = page.locator("[role='option'], [role='menuitem'], [role='menuitemradio'], [role='listbox'] *")
-        .filter({ hasText: targetOptionRegex })
-        .first();
-      if ((await optLoc.count()) > 0 && (await optLoc.isVisible().catch(() => false))) {
-        const t = (await optLoc.innerText().catch(() => "")).trim();
-        if (!/custom|pronoun/i.test(t)) {
-          console.log(`[Facebook] Clicking gender option via locator: '${t}'`);
-          await optLoc.click({ force: true });
-        }
-      }
-    }
-
-    await page.waitForTimeout(500);
-
-    // 3. Post-Click Verification: Ensure box text updated and Custom is NOT active
-    const updatedBoxText = ((await boxLocator.innerText().catch(() => "")) || "").trim();
-    const isCustomActive = /custom|pronoun|कस्टम|કસ્ટમ|other/i.test(updatedBoxText);
-    const isUnselected = /select your gender|select|चुनें|પસંદ/i.test(updatedBoxText) || updatedBoxText === "";
-
-    if (!isCustomActive && !isUnselected && targetOptionRegex.test(updatedBoxText)) {
-      console.log(`[Facebook] Successfully verified Gender selection: '${updatedBoxText.replace(/\n/g, " - ")}'`);
-      // Wipe any lingering custom gender inputs that might have appeared
-      await page.evaluate(() => {
-        const customInputs = Array.from(document.querySelectorAll("input[name*='custom_gender' i], input[placeholder*='Gender' i], input[aria-label*='Gender' i]"));
-        for (const inp of customInputs) inp.value = "";
-      }).catch(() => { });
-      return true;
-    }
-
-    if (isCustomActive) {
-      console.warn(`[Facebook] ⚠️ Custom was selected ('${updatedBoxText}')! Retrying to force Female/Male...`);
-    } else {
-      console.warn(`[Facebook] Gender box still unselected ('${updatedBoxText}'). Retrying...`);
-    }
   }
 
   return false;
@@ -1620,6 +1672,15 @@ async function fillFacebookEmail(page, email) {
 async function fillBirthdayAndGender(page, dobObj, targetGender) {
   console.log(`[Facebook] Setting Birthday (${dobObj.formatted}) and Gender (${targetGender})...`);
 
+  // The React form renders progressively. In fast mode (--fast) the name fields
+  // are filled instantly, so we can arrive before the birthday controls exist.
+  // Wait for either layout (native selects or React comboboxes) before filling.
+  await page.waitForFunction(() => {
+    if (document.querySelector("select[name='birthday_day']")) return true;
+    return Array.from(document.querySelectorAll("[aria-haspopup='listbox'], [role='combobox']")).some((b) =>
+      /day|दिन|तारीख/i.test(b.getAttribute("aria-label") || "") || /day|दिन|तारीख/i.test((b.innerText || "").trim()));
+  }, null, { timeout: 10000 }).catch(() => { });
+
   // Check 1: Native HTML <select> elements (fallback for legacy or mobile views)
   const daySelect = page.locator("select[name='birthday_day']").first();
   const monthSelect = page.locator("select[name='birthday_month']").first();
@@ -1630,21 +1691,21 @@ async function fillBirthdayAndGender(page, dobObj, targetGender) {
     await monthSelect.selectOption(String(dobObj.monthIndex || dobObj.month)).catch(() => { });
     await yearSelect.selectOption(String(dobObj.year)).catch(() => { });
   } else {
-    // Check 2: Modern Facebook React Comboboxes (targeted semantically by aria-label & text)
-    // 1. Day
-    const dayBox = page.locator("[role='combobox'][aria-label*='Day' i], [role='combobox']:has-text('Day'), [role='combobox'][aria-label*='दिन' i], [role='combobox']:has-text('दिन'), [role='combobox'][aria-label*='તારીખ' i]");
+    // Check 2: Modern Facebook React Comboboxes (targeted semantically by bilingual keywords)
+    // 1. Day (handles Hindi layouts where Day is first, or English where Day is second)
+    const dayBox = page.locator("[aria-haspopup='listbox']:has-text('दिन'), [aria-haspopup='listbox'][aria-label*='दिन' i], [aria-haspopup='listbox']:has-text('Day'), [aria-haspopup='listbox'][aria-label*='Day' i], [role='combobox']:has-text('दिन'), [role='combobox']:has-text('Day')");
     const dayRegex = new RegExp(`^(?:${dobObj.day}|${dobObj.dayStr}|[०-९]+)$`);
-    await selectCustomCombobox(page, "Day", dayBox, dayRegex);
+    await selectCustomCombobox(page, "Day", dayBox, dayRegex, 0, ["Day", "दिन", "तारीख", "તારીખ"]);
 
     // 2. Month
-    const monthBox = page.locator("[role='combobox'][aria-label*='Month' i], [role='combobox']:has-text('Month'), [role='combobox'][aria-label*='महीना' i], [role='combobox']:has-text('महीना'), [role='combobox'][aria-label*='મહિનો' i]");
+    const monthBox = page.locator("[aria-haspopup='listbox']:has-text('महीना'), [aria-haspopup='listbox'][aria-label*='महीना' i], [aria-haspopup='listbox']:has-text('Month'), [aria-haspopup='listbox'][aria-label*='Month' i], [role='combobox']:has-text('महीना'), [role='combobox']:has-text('Month')");
     const monthRegex = new RegExp(`^(?:${dobObj.month}|${dobObj.month.slice(0, 3)}|${dobObj.monthHindi})$`, "i");
-    await selectCustomCombobox(page, "Month", monthBox, monthRegex);
+    await selectCustomCombobox(page, "Month", monthBox, monthRegex, 1, ["Month", "महीना", "महिना", "મહિનો"]);
 
     // 3. Year
-    const yearBox = page.locator("[role='combobox'][aria-label*='Year' i], [role='combobox']:has-text('Year'), [role='combobox'][aria-label*='वर्ष' i], [role='combobox']:has-text('वर्ष')");
+    const yearBox = page.locator("[aria-haspopup='listbox']:has-text('वर्ष'), [aria-haspopup='listbox'][aria-label*='वर्ष' i], [aria-haspopup='listbox']:has-text('Year'), [aria-haspopup='listbox'][aria-label*='Year' i], [role='combobox']:has-text('वर्ष'), [role='combobox']:has-text('Year')");
     const yearRegex = new RegExp(`^(?:${dobObj.year}|[०-९]+)$`);
-    await selectCustomCombobox(page, "Year", yearBox, yearRegex);
+    await selectCustomCombobox(page, "Year", yearBox, yearRegex, 2, ["Year", "वर्ष", "साल", "વર્ષ"]);
   }
 
   // Robust Gender Selection
@@ -2550,7 +2611,7 @@ async function run() {
     user_data_dir: profileDir,
     headless: headless,
     os: "windows",
-    humanize: 0.85,
+    humanize: fastMode ? false : 0.85,
     block_webrtc: true,
     exclude_addons: ["UBO"],     // Exclude bundled ad-blocker to prevent CSP data: injection violations & CDN script drops
     screen: { maxWidth: scr.width, maxHeight: scr.height },
@@ -2899,7 +2960,20 @@ async function run() {
       for (let valAttempt = 1; valAttempt <= 3; valAttempt++) {
         const formValidation = await page.evaluate((expectedEmail) => {
           const bodyTxt = (document.body && document.body.innerText) || "";
-          const genderBad = bodyTxt.includes("Please choose a gender") || bodyTxt.includes("Select your gender") || bodyTxt.includes("Select your pronoun") || bodyTxt.includes("Please select your pronoun") || bodyTxt.includes("कृपया एक लिंग चुनें");
+          // Facebook keeps the "Select your gender" placeholder in the DOM after a
+          // value is picked, so page text can never prove the field is empty.
+          // Read the control itself (tagged by selectFacebookGender) instead.
+          const genderBox = document.querySelector("[data-fb-gender-box='true']")
+            || Array.from(document.querySelectorAll("[aria-haspopup='listbox'], [role='combobox']")).find((b) => /select your gender|gender|लिंग|अपना लिंग/i.test(b.innerText || "") || /gender|लिंग/i.test(b.getAttribute("aria-label") || ""));
+          const genderValue = genderBox
+            ? ((genderBox.innerText || "").replace(/Select your gender|अपना लिंग चुनें|कृपया लिंग चुनें|लिंग/gi, "").split("\n").map((s) => s.trim()).filter(Boolean).pop() || "")
+            : "";
+          const nativeSex = document.querySelector("select[name='sex']");
+          const nativeGender = nativeSex && nativeSex.selectedIndex >= 0
+            ? (nativeSex.options[nativeSex.selectedIndex].text || "").trim()
+            : "";
+          const genderOk = /^(female|male|महिला|पुरुष|स्त्री|पुरूष)$/i.test(genderValue) || /^(female|male|महिला|पुरुष|स्त्री|पुरूष)$/i.test(nativeGender);
+          const genderBad = !genderOk;
 
           const pw = document.querySelector("input[type='password']:not([type='hidden'])");
           const form = (pw && (pw.closest("form") || pw.closest("div[role='dialog']"))) || document.body;
