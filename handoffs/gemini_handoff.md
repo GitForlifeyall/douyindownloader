@@ -7,6 +7,14 @@ This document logs all architectural decisions, code changes, pipeline updates, 
 
 ## Session History & Major Changes
 
+### [2026-11-24] Douyin Native Google Chrome Session Login & Cookie Synchronization Tool
+1. **Real Google Chrome Launcher (`tools/douyin_chrome_login.py` & `douyin_login.bat`)**:
+   - Switched from anti-detect browser to real installed **Google Chrome** via Playwright (`channel="chrome"`).
+   - Uses persistent profile directory: `output/profiles/douyin_chrome`.
+   - Opens Douyin (and optionally the exact target Douyin video URL passed via `--url`).
+   - On pressing Enter, extracts all active session cookies and automatically updates [TikTokDownloader/Volume/settings.json](file:///c:/Users/shahi/OneDrive/Desktop/douyin/TikTokDownloader/Volume/settings.json) (`"cookie": ...`).
+   - Supports 1-click execution via `douyin_login.bat`.
+
 ### [2026-11-24] Douyin Persistent Login & Cookie Synchronization Tool
 1. **Tool Creation (`tools/douyin_login_cookie.mjs` & `douyin_login.bat`)**:
    - Built dedicated persistent browser launcher using Camoufox anti-detect browser (`output/profiles/douyin`).
