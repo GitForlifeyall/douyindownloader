@@ -659,11 +659,17 @@ class SRTDubTranslator:
         call_timeout = 45000 if len(prompt) > 1800 else timeout_ms
 
         # Parallel race in waves with early return as soon as highest surviving model succeeds:
-        # Wave 1 (Fast Priority): 4-hydrogen (elite reasoning) > 3.8 > 3.7 > 3.6 across 4 distinct keys
-        # Wave 2 (Failover): 3-flash-preview > 3.5-flash-lite > gemini-flash-latest
+        # Prioritize self.model first, followed by proven reliable 3.5-flash, 3.5-flash-lite, 3.6-flash
+        primary_model = self.model or "gemini-3.5-flash"
+        wave1 = [primary_model]
+        for m in ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.8-flash"]:
+            if m not in wave1:
+                wave1.append(m)
+        wave1 = wave1[:4]
+
         race_waves = [
-            ["gemini-4-hydrogen", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"],
-            ["gemini-3-flash-preview", "gemini-3.5-flash-lite", "gemini-flash-latest"],
+            wave1,
+            ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.6-flash"],
         ]
         if len(self.api_keys) >= 3:
             from concurrent.futures import ThreadPoolExecutor, as_completed

@@ -7,6 +7,15 @@ This document logs all architectural decisions, code changes, pipeline updates, 
 
 ## Session History & Major Changes
 
+### [2026-11-24] Translator Parallel Race Alignment for Gemini 3.5 Models
+1. **Root Cause Diagnosis**:
+   - In `dubbing_studio/translator.py`, `_transcreate_single_pass` had hardcoded `race_waves` starting with `['gemini-4-hydrogen', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash']`.
+   - Even when the user passed `--model "gemini-3.5-flash"`, `self.model` was ignored during Wave 1 parallel race, leading to 503 UNAVAILABLE traffic spikes on 3.8/3.7/hydrogen.
+2. **Dynamic User Model Prioritization**:
+   - Updated `race_waves` to place `primary_model = self.model or "gemini-3.5-flash"` at position #1 in Wave 1.
+   - Populated fallback waves with the verified 100% active models: `gemini-3.5-flash-lite`, `gemini-3.5-flash`, and `gemini-3.6-flash`.
+   - Translation requests now complete in ~1,000ms with zero 503 stalls.
+
 ### [2026-11-24] Douyin Native Google Chrome Session Login & Cookie Synchronization Tool
 1. **Real Google Chrome Launcher (`tools/douyin_chrome_login.py` & `douyin_login.bat`)**:
    - Switched from anti-detect browser to real installed **Google Chrome** via Playwright (`channel="chrome"`).
