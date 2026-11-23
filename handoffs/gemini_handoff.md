@@ -54,6 +54,13 @@ This document logs all architectural decisions, code changes, pipeline updates, 
      - Added pre-selection `Escape` keypress to close any open popover so subsequent triggers are never covered.
      - Added DOM evaluation click fallback if locator click is obscured.
      - Added Hindi gender value parsing (`/^(female|male|महिला|पुरुष|स्त्री|पुरूष)$/i`) in pre-submit validation.
+9. **Metricool Multi-Step Onboarding Wizard Robustness & Pipe-Delimited `--account` Support**:
+   - Refactored `handleMetricoolOnboarding` in [tools/metricool_camoufox.mjs](file:///c:/Users/shahi/OneDrive/Desktop/douyin/tools/metricool_camoufox.mjs):
+     - Decoupled Screenshot 1 (Role Selection), Screenshot 2 (Team Size: "Just me" / "I will work with more colleagues"), and Screenshot 3 (Usage: "Programming and publishing of content", etc.) into independent evaluation stages.
+     - Step 2 now properly detects team options and clicks Continue.
+     - Step 3 selects usage options, clicks Continue, and transitions to the dashboard.
+     - Retains persistent open browser (`context.on("close")`) for user visual inspection.
+     - Added unified pipe-delimited `--account "email|password|refreshToken|clientId"` parsing.
 
 ### [2026-11-22] FlowKit Environment & Python Executable Alignment
 1. **FlowKit Agent Python Environment**:

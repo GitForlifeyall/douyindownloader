@@ -335,148 +335,223 @@ async function pollOutlookVerification(cId, rToken, maxWaitSec = 60) {
 }
 
 // Complete all Metricool multi-step onboarding survey dialogs
-async function handleMetricoolOnboarding(page, maxWaitMs = 35000) {
+async function handleMetricoolOnboarding(page, maxWaitMs = 60000) {
   console.log("[Camoufox] Checking for Metricool onboarding survey dialogs...");
   const startTime = Date.now();
   await page.waitForTimeout(2000);
 
   while (Date.now() - startTime < maxWaitMs) {
-    const pageHtml = await page.content();
+    let acted = false;
 
-    // Dialog 4 confirmation check first (in case it appeared over Dialog 3)
-    if (pageHtml.includes("Wait! Are you sure you want to leave?") || (pageHtml.includes("Cancel") && pageHtml.includes("Accept"))) {
-      console.log("[Onboarding] Dialog 4 confirmation modal detected...");
-      const acceptBtn = page.locator("button:has-text('Accept')").first();
-      if ((await acceptBtn.count()) > 0 && (await acceptBtn.isVisible())) {
-        console.log("[Onboarding] Clicking Accept button...");
-        await acceptBtn.click({ force: true });
-        await page.waitForTimeout(3000);
+    // --- DIALOG 4: Leave confirmation check ---
+    const leaveModal = await page.evaluate(() => {
+      const allText = document.body ? document.body.innerText : "";
+      return allText.includes("Wait! Are you sure you want to leave?") || (allText.includes("Cancel") && allText.includes("Accept"));
+    });
+    if (leaveModal) {
+      console.log("[Onboarding] Confirmation modal detected. Clicking Accept...");
+      const acceptClicked = await page.evaluate(() => {
+        const btns = Array.from(document.querySelectorAll("button, .v-btn, [role='button']"));
+        const btn = btns.find(b => /accept|aceptar|accepter/i.test((b.innerText || "").trim()));
+        if (btn) { btn.click(); return true; }
+        return false;
+      });
+      if (acceptClicked) {
+        await page.waitForTimeout(2500);
         continue;
       }
     }
 
-    // Dialog 1: "What describes you best?"
-    if (pageHtml.includes("What describes you best?")) {
-      console.log("[Onboarding] Dialog 1 detected: 'What describes you best?'");
+    // --- STEP 1 (Screenshot 1): Role Selection ---
+    const roleOptions = [
+      "Content creator, personal brand or influencer",
+      "Social media management in my company",
+      "Freelancer working for clients",
+      "Marketing agency",
+    ];
+    const roleDetected = await page.evaluate((roles) => {
+      const allText = document.body ? document.body.innerText : "";
+      return roles.some(r => allText.includes(r.split(",")[0]));
+    }, roleOptions);
 
-      // 1. Randomly pick any one of the 4 role cards (Screenshot 1)
-      const roleOptions = [
-        "Content creator, personal brand or influencer",
-        "Social media management in my company",
-        "Freelancer working for clients",
-        "Marketing agency",
-      ];
+    if (roleDetected) {
+      console.log("[Onboarding] Step 1 detected: Role selection cards visible (Screenshot 1).");
       const shuffledRoles = [...roleOptions].sort(() => Math.random() - 0.5);
-      let roleSelected = false;
-      for (const roleText of shuffledRoles) {
-        const card = page.locator(`text='${roleText}'`).first();
-        if ((await card.count()) > 0 && (await card.isVisible())) {
-          console.log(`[Onboarding] Randomly selected role: '${roleText}'`);
-          await card.click({ force: true });
-          roleSelected = true;
-          await page.waitForTimeout(600);
-          break;
-        }
-      }
-      if (!roleSelected) {
-        const firstCard = page.locator(".v-dialog .v-card, .v-dialog [role='button']").first();
-        if ((await firstCard.count()) > 0) await firstCard.click({ force: true });
-        await page.waitForTimeout(600);
-      }
 
-      // 2. Randomly pick any one of the team options (Screenshot 2: "How many people are going to use metricool?")
-      const teamOptions = [
-        "Just me",
-        "I will work with more colleagues",
-      ];
+      const clickedRole = await page.evaluate((roles) => {
+        const elements = Array.from(document.querySelectorAll("div, span, p, .v-card, [role='button']"));
+        for (const role of roles) {
+          const match = elements.find(el => {
+            const t = (el.innerText || "").trim();
+            return t === role || t.startsWith(role.slice(0, 25));
+          });
+          if (match) {
+            const clickable = match.closest(".v-card") || match.closest("[role='button']") || match;
+            clickable.scrollIntoView();
+            clickable.click();
+            return role;
+          }
+        }
+        return null;
+      }, shuffledRoles);
+
+      if (clickedRole) {
+        console.log(`[Onboarding] Selected role card: '${clickedRole}'`);
+        acted = true;
+        await page.waitForTimeout(2000);
+        continue;
+      }
+    }
+
+    // --- STEP 2 (Screenshot 2): Team Size ("How many people are going to use metricool?") ---
+    const teamOptions = [
+      "Just me",
+      "I will work with more colleagues",
+    ];
+    const teamDetected = await page.evaluate((teams) => {
+      const allText = document.body ? document.body.innerText : "";
+      return teams.some(t => allText.includes(t)) || allText.includes("How many people are going to use metricool");
+    }, teamOptions);
+
+    if (teamDetected) {
+      console.log("[Onboarding] Step 2 detected: Team size selection (Screenshot 2).");
       const shuffledTeams = [...teamOptions].sort(() => Math.random() - 0.5);
-      for (const teamText of shuffledTeams) {
-        const card = page.locator(`text='${teamText}'`).first();
-        if ((await card.count()) > 0 && (await card.isVisible())) {
-          console.log(`[Onboarding] Randomly selected team option: '${teamText}'`);
-          await card.click({ force: true });
-          await page.waitForTimeout(600);
-          break;
+
+      const clickedTeam = await page.evaluate((teams) => {
+        const elements = Array.from(document.querySelectorAll("div, span, p, .v-card, label, [role='button']"));
+        for (const team of teams) {
+          const match = elements.find(el => (el.innerText || "").trim().includes(team));
+          if (match) {
+            const clickable = match.closest(".v-card") || match.closest("[role='button']") || match;
+            clickable.scrollIntoView();
+            clickable.click();
+            return team;
+          }
         }
+        return null;
+      }, shuffledTeams);
+
+      if (clickedTeam) {
+        console.log(`[Onboarding] Selected team option: '${clickedTeam}'`);
+        await page.waitForTimeout(1000);
       }
 
-      // 3. Click Continue (Screenshot 2)
-      const contBtn = page.locator("button:has-text('Continue')").first();
-      if ((await contBtn.count()) > 0 && (await contBtn.isVisible())) {
-        console.log("[Onboarding] Clicking Continue on Dialog 1...");
-        await contBtn.click({ force: true });
-        await page.waitForTimeout(3000);
+      // Click Continue on Step 2
+      const contClicked = await page.evaluate(() => {
+        const btns = Array.from(document.querySelectorAll("button, .v-btn, [role='button']"));
+        const btn = btns.find(b => /continue|continuer|continuar/i.test((b.innerText || "").trim()));
+        if (btn) {
+          btn.scrollIntoView();
+          btn.click();
+          return true;
+        }
+        return false;
+      });
+
+      if (contClicked) {
+        console.log("[Onboarding] Clicked Continue on Step 2.");
+        acted = true;
+        await page.waitForTimeout(2500);
+        continue;
       }
-      continue;
     }
 
-    // Dialog 2: "How are you going to use Metricool?" (Screenshot 3)
-    if (pageHtml.includes("How are you going to use Metricool?")) {
-      console.log("[Onboarding] Dialog 2 detected: 'How are you going to use Metricool?'");
-      
-      // Randomly pick any one of the usage options (Screenshot 3)
-      const usageOptions = [
-        "Programming and publishing of content",
-        "Analysis and reports",
-        "Create a page for your bio link",
-        "Conversation management",
-      ];
+    // --- STEP 3 (Screenshot 3): Usage Selection ("You can select more than one" / "How are you going to use Metricool?") ---
+    const usageOptions = [
+      "Programming and publishing of content",
+      "Analysis and reports",
+      "Create a page for your bio link",
+      "Conversation management",
+    ];
+    const usageDetected = await page.evaluate((usages) => {
+      const allText = document.body ? document.body.innerText : "";
+      return usages.some(u => allText.includes(u.slice(0, 20))) || allText.includes("You can select more than one");
+    }, usageOptions);
+
+    if (usageDetected) {
+      console.log("[Onboarding] Step 3 detected: Usage selection (Screenshot 3).");
       const shuffledUsage = [...usageOptions].sort(() => Math.random() - 0.5);
-      for (const usageText of shuffledUsage) {
-        const card = page.locator(`text='${usageText}'`).first();
-        if ((await card.count()) > 0 && (await card.isVisible())) {
-          console.log(`[Onboarding] Randomly selected usage option: '${usageText}'`);
-          await card.click({ force: true });
-          await page.waitForTimeout(600);
-          break;
+
+      const clickedUsage = await page.evaluate((usages) => {
+        const elements = Array.from(document.querySelectorAll("div, span, p, .v-card, label, [role='button']"));
+        for (const usage of usages) {
+          const match = elements.find(el => (el.innerText || "").trim().includes(usage));
+          if (match) {
+            const clickable = match.closest(".v-card") || match.closest("[role='button']") || match;
+            clickable.scrollIntoView();
+            clickable.click();
+            return usage;
+          }
         }
+        return null;
+      }, shuffledUsage);
+
+      if (clickedUsage) {
+        console.log(`[Onboarding] Selected usage option: '${clickedUsage}'`);
+        await page.waitForTimeout(1000);
       }
 
-      // Click Continue (Screenshot 3)
-      const cont2 = page.locator("button:has-text('Continue')").last();
-      if ((await cont2.count()) > 0 && (await cont2.isVisible())) {
-        console.log("[Onboarding] Clicking Continue on Dialog 2...");
-        await cont2.click({ force: true });
-        await page.waitForTimeout(3000);
+      // Click Continue on Step 3
+      const contClicked3 = await page.evaluate(() => {
+        const btns = Array.from(document.querySelectorAll("button, .v-btn, [role='button']"));
+        const btn = btns.find(b => /continue|continuer|continuar/i.test((b.innerText || "").trim()));
+        if (btn) {
+          btn.scrollIntoView();
+          btn.click();
+          return true;
+        }
+        return false;
+      });
+
+      if (contClicked3) {
+        console.log("[Onboarding] Clicked Continue on Step 3.");
+        acted = true;
+        await page.waitForTimeout(2500);
+        continue;
       }
-      continue;
     }
 
-    // Dialog 3: "Connect your social networks"
-    if (pageHtml.includes("Connect your social networks")) {
-      console.log("[Onboarding] Dialog 3 detected: 'Connect your social networks'");
-      const finishBtn = page.locator("button:has-text('Finish')").last();
-      if ((await finishBtn.count()) > 0 && (await finishBtn.isVisible())) {
-        console.log("[Onboarding] Clicking Finish on Dialog 3...");
-        await finishBtn.click({ force: true });
-        await page.waitForTimeout(3000);
+    // --- STEP 4: "Connect your social networks" / Finish screen ---
+    const finishDetected = await page.evaluate(() => {
+      const allText = document.body ? document.body.innerText : "";
+      if (allText.includes("Connect your social networks") || allText.includes("brandSummary") || allText.includes("Inbox")) {
+        const btns = Array.from(document.querySelectorAll("button, .v-btn, [role='button']"));
+        const finish = btns.find(b => /finish|terminar|finaliser|skip/i.test((b.innerText || "").trim()));
+        if (finish) {
+          finish.click();
+          return true;
+        }
       }
-      continue;
+      return false;
+    });
+
+    if (finishDetected) {
+      console.log("[Onboarding] Clicked Finish on final screen.");
+      await page.waitForTimeout(2000);
+      break;
     }
 
     // Dismiss tour and welcome modals
     let tourDismissed = false;
     for (const text of ["Skip tour", "Skip", "Got it", "Understood", "Close", "Accept all"]) {
-      const btn = page.locator(`button:has-text('${text}')`).first();
+      const btn = page.locator(`button:has-text('${text}'), .v-btn:has-text('${text}'), [role='button']:has-text('${text}')`).first();
       if ((await btn.count()) > 0 && (await btn.isVisible())) {
         console.log(`[Onboarding] Dismissing modal with button: '${text}'`);
         await btn.click({ force: true });
         await page.waitForTimeout(1000);
         tourDismissed = true;
+        acted = true;
         break;
       }
     }
     if (tourDismissed) continue;
 
-    // Check if overlays are gone
-    const activeOverlays = page.locator(".v-overlay--active .v-dialog");
-    if ((await activeOverlays.count()) === 0) {
-      console.log("[Onboarding] All onboarding dialogs dismissed.");
-      break;
+    if (!acted) {
+      await page.waitForTimeout(1500);
     }
-
-    await page.waitForTimeout(1500);
   }
+
+  console.log("[Onboarding] Onboarding flow completed.");
 }
 
 // Save account to output/metricool_registered_accounts.json
