@@ -893,8 +893,14 @@ async function main() {
     os: "windows",
     humanize: (hasFlag("--fast") || hasFlag("--skip-delays") || hasFlag("--no-trajectory")) ? false : true,
     block_webrtc: true,
+    i_know_what_im_doing: true,
     iKnowWhatImDoing: true,
     locale: `${chosenLang}-${chosenRegion}`,
+    firefox_user_prefs: {
+      "network.trr.mode": 5, // Disable DoH to prevent residential proxy DNS resolution hangs
+      "network.proxy.socks_remote_dns": true,
+      "network.http.connection-retry-timeout": 1500,
+    },
     config: {
       timezone: chosenTz,
       "locale:region": chosenRegion,
@@ -918,10 +924,20 @@ async function main() {
       browserConfig.geoip = false; // Timezone & locale already explicitly aligned above; avoids external Impit IP check timeouts
     }
   }
+
+  // Clear stale Firefox locks in the profile dir to prevent launch hangs
+  for (const lock of ["parent.lock", "lock", ".parentlock"]) {
+    const lockPath = path.join(profileDir, lock);
+    if (fs.existsSync(lockPath)) {
+      try { fs.unlinkSync(lockPath); } catch (e) { }
+    }
+  }
+
   const context = await Camoufox(browserConfig);
 
-  const page = await context.newPage();
+  const page = (context.pages && context.pages().length > 0) ? context.pages()[0] : await context.newPage();
   await page.setViewportSize({ width: 1280, height: 850 }).catch(() => {});
+  await page.bringToFront().catch(() => {});
 
   try {
     // =========================================================================
