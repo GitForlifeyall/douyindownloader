@@ -50,10 +50,10 @@ let refreshToken = getArg("--refresh-token");
 const accountArg = getArg("--account");
 if (accountArg && accountArg.includes("|")) {
   const parts = accountArg.split("|");
-  if (!email) email = parts[0]?.trim();
-  if (!password) password = parts[1]?.trim();
-  if (!refreshToken) refreshToken = parts[2]?.trim();
-  if (!clientId) clientId = (parts[3] || "9e5f94bc-e8a4-4e73-b8be-63364c29d753").trim();
+  email = parts[0]?.trim();
+  password = parts[1]?.trim();
+  refreshToken = parts[2]?.trim();
+  clientId = (parts[3] || "9e5f94bc-e8a4-4e73-b8be-63364c29d753").trim();
 }
 const DEFAULT_PROXY = "customer-resi_4edb25d7:fo4ENfj4pMx+@pr.oxylabs.io:7777";
 const proxyArg = getArg("--proxy", DEFAULT_PROXY);
@@ -335,15 +335,82 @@ async function pollOutlookVerification(cId, rToken, maxWaitSec = 60) {
 }
 
 // Complete all Metricool multi-step onboarding survey dialogs
-async function handleMetricoolOnboarding(page, maxWaitMs = 60000) {
+async function handleMetricoolOnboarding(page, maxWaitMs = 90000) {
   console.log("[Camoufox] Checking for Metricool onboarding survey dialogs...");
   const startTime = Date.now();
   await page.waitForTimeout(2000);
 
+  // Helper to click any option card cleanly using Playwright locator + coordinates + DOM dispatch
+  async function clickCard(targetText) {
+    let clicked = false;
+    try {
+      const loc = page.getByText(targetText, { exact: false }).first();
+      if ((await loc.count()) > 0 && (await loc.isVisible())) {
+        await loc.scrollIntoViewIfNeeded().catch(() => {});
+        const box = await loc.boundingBox();
+        if (box && box.width > 0 && box.height > 0) {
+          await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2).catch(() => {});
+          console.log(`[Onboarding] Coordinates clicked at (${Math.round(box.x + box.width / 2)}, ${Math.round(box.y + box.height / 2)}) for: '${targetText}'`);
+          clicked = true;
+        }
+        await loc.click({ force: true }).catch(() => {});
+      }
+    } catch (e) {
+      console.warn(`[Onboarding] Locator click note: ${e.message}`);
+    }
+
+    // Comprehensive DOM dispatch fallback on the innermost leaf and its parent card
+    await page.evaluate((text) => {
+      const allEls = Array.from(document.querySelectorAll("*"));
+      const leaf = allEls.find(el => {
+        return el.children.length === 0 && (el.textContent || "").trim().includes(text.slice(0, 15));
+      });
+      if (leaf) {
+        const card = leaf.closest(".v-card") || leaf.closest("[role='button']") || leaf.closest("div[class*='card']") || leaf.parentElement || leaf;
+        ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(evt => {
+          card.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, view: window }));
+        });
+        if (typeof card.click === 'function') card.click();
+      }
+    }, targetText).catch(() => {});
+
+    return clicked;
+  }
+
+  // Helper to click Continue button
+  async function clickContinue() {
+    await page.waitForTimeout(800);
+    const contBtn = page.locator("button, .v-btn, [role='button']").filter({ hasText: /continue|continuer|continuar/i }).first();
+    if ((await contBtn.count()) > 0 && (await contBtn.isVisible())) {
+      await contBtn.scrollIntoViewIfNeeded().catch(() => {});
+      const box = await contBtn.boundingBox();
+      if (box && box.width > 0 && box.height > 0) {
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2).catch(() => {});
+      }
+      await contBtn.click({ force: true }).catch(() => {});
+      console.log("[Onboarding] Clicked 'Continue' button.");
+      return true;
+    }
+    const domCont = await page.evaluate(() => {
+      const btns = Array.from(document.querySelectorAll("button, .v-btn, [role='button']"));
+      const btn = btns.find(b => /continue|continuer|continuar/i.test((b.innerText || "").trim()));
+      if (btn) {
+        btn.click();
+        return true;
+      }
+      return false;
+    }).catch(() => false);
+    if (domCont) {
+      console.log("[Onboarding] Clicked 'Continue' via DOM fallback.");
+      return true;
+    }
+    return false;
+  }
+
   while (Date.now() - startTime < maxWaitMs) {
     let acted = false;
 
-    // --- DIALOG 4: Leave confirmation check ---
+    // --- 1. Leave confirmation check ---
     const leaveModal = await page.evaluate(() => {
       const allText = document.body ? document.body.innerText : "";
       return allText.includes("Wait! Are you sure you want to leave?") || (allText.includes("Cancel") && allText.includes("Accept"));
@@ -357,7 +424,7 @@ async function handleMetricoolOnboarding(page, maxWaitMs = 60000) {
         return false;
       });
       if (acceptClicked) {
-        await page.waitForTimeout(2500);
+        await page.waitForTimeout(2000);
         continue;
       }
     }
@@ -371,36 +438,20 @@ async function handleMetricoolOnboarding(page, maxWaitMs = 60000) {
     ];
     const roleDetected = await page.evaluate((roles) => {
       const allText = document.body ? document.body.innerText : "";
-      return roles.some(r => allText.includes(r.split(",")[0]));
+      return roles.some(r => allText.includes(r.split(",")[0].trim()));
     }, roleOptions);
 
     if (roleDetected) {
       console.log("[Onboarding] Step 1 detected: Role selection cards visible (Screenshot 1).");
-      const shuffledRoles = [...roleOptions].sort(() => Math.random() - 0.5);
-
-      const clickedRole = await page.evaluate((roles) => {
-        const elements = Array.from(document.querySelectorAll("div, span, p, .v-card, [role='button']"));
-        for (const role of roles) {
-          const match = elements.find(el => {
-            const t = (el.innerText || "").trim();
-            return t === role || t.startsWith(role.slice(0, 25));
-          });
-          if (match) {
-            const clickable = match.closest(".v-card") || match.closest("[role='button']") || match;
-            clickable.scrollIntoView();
-            clickable.click();
-            return role;
-          }
-        }
-        return null;
-      }, shuffledRoles);
-
-      if (clickedRole) {
-        console.log(`[Onboarding] Selected role card: '${clickedRole}'`);
-        acted = true;
-        await page.waitForTimeout(2000);
-        continue;
-      }
+      const chosenRole = roleOptions[Math.floor(Math.random() * roleOptions.length)];
+      console.log(`[Onboarding] Selecting role: '${chosenRole}'...`);
+      await clickCard(chosenRole.split(",")[0].trim());
+      await page.waitForTimeout(1000);
+      await saveScreenshot(page, "metricool_onboarding_step1_role.png");
+      await clickContinue();
+      acted = true;
+      await page.waitForTimeout(2500);
+      continue;
     }
 
     // --- STEP 2 (Screenshot 2): Team Size ("How many people are going to use metricool?") ---
@@ -410,50 +461,20 @@ async function handleMetricoolOnboarding(page, maxWaitMs = 60000) {
     ];
     const teamDetected = await page.evaluate((teams) => {
       const allText = document.body ? document.body.innerText : "";
-      return teams.some(t => allText.includes(t)) || allText.includes("How many people are going to use metricool");
+      return allText.includes("How many people are going to use metricool") || teams.some(t => allText.includes(t));
     }, teamOptions);
 
     if (teamDetected) {
       console.log("[Onboarding] Step 2 detected: Team size selection (Screenshot 2).");
-      const shuffledTeams = [...teamOptions].sort(() => Math.random() - 0.5);
-
-      const clickedTeam = await page.evaluate((teams) => {
-        const elements = Array.from(document.querySelectorAll("div, span, p, .v-card, label, [role='button']"));
-        for (const team of teams) {
-          const match = elements.find(el => (el.innerText || "").trim().includes(team));
-          if (match) {
-            const clickable = match.closest(".v-card") || match.closest("[role='button']") || match;
-            clickable.scrollIntoView();
-            clickable.click();
-            return team;
-          }
-        }
-        return null;
-      }, shuffledTeams);
-
-      if (clickedTeam) {
-        console.log(`[Onboarding] Selected team option: '${clickedTeam}'`);
-        await page.waitForTimeout(1000);
-      }
-
-      // Click Continue on Step 2
-      const contClicked = await page.evaluate(() => {
-        const btns = Array.from(document.querySelectorAll("button, .v-btn, [role='button']"));
-        const btn = btns.find(b => /continue|continuer|continuar/i.test((b.innerText || "").trim()));
-        if (btn) {
-          btn.scrollIntoView();
-          btn.click();
-          return true;
-        }
-        return false;
-      });
-
-      if (contClicked) {
-        console.log("[Onboarding] Clicked Continue on Step 2.");
-        acted = true;
-        await page.waitForTimeout(2500);
-        continue;
-      }
+      const chosenTeam = teamOptions[Math.floor(Math.random() * teamOptions.length)];
+      console.log(`[Onboarding] Selecting team option: '${chosenTeam}'...`);
+      await clickCard(chosenTeam);
+      await page.waitForTimeout(1000);
+      await saveScreenshot(page, "metricool_onboarding_step2_team.png");
+      await clickContinue();
+      acted = true;
+      await page.waitForTimeout(2500);
+      continue;
     }
 
     // --- STEP 3 (Screenshot 3): Usage Selection ("You can select more than one" / "How are you going to use Metricool?") ---
@@ -465,79 +486,46 @@ async function handleMetricoolOnboarding(page, maxWaitMs = 60000) {
     ];
     const usageDetected = await page.evaluate((usages) => {
       const allText = document.body ? document.body.innerText : "";
-      return usages.some(u => allText.includes(u.slice(0, 20))) || allText.includes("You can select more than one");
+      return allText.includes("You can select more than one") || usages.some(u => allText.includes(u.slice(0, 20)));
     }, usageOptions);
 
     if (usageDetected) {
       console.log("[Onboarding] Step 3 detected: Usage selection (Screenshot 3).");
-      const shuffledUsage = [...usageOptions].sort(() => Math.random() - 0.5);
-
-      const clickedUsage = await page.evaluate((usages) => {
-        const elements = Array.from(document.querySelectorAll("div, span, p, .v-card, label, [role='button']"));
-        for (const usage of usages) {
-          const match = elements.find(el => (el.innerText || "").trim().includes(usage));
-          if (match) {
-            const clickable = match.closest(".v-card") || match.closest("[role='button']") || match;
-            clickable.scrollIntoView();
-            clickable.click();
-            return usage;
-          }
-        }
-        return null;
-      }, shuffledUsage);
-
-      if (clickedUsage) {
-        console.log(`[Onboarding] Selected usage option: '${clickedUsage}'`);
-        await page.waitForTimeout(1000);
-      }
-
-      // Click Continue on Step 3
-      const contClicked3 = await page.evaluate(() => {
-        const btns = Array.from(document.querySelectorAll("button, .v-btn, [role='button']"));
-        const btn = btns.find(b => /continue|continuer|continuar/i.test((b.innerText || "").trim()));
-        if (btn) {
-          btn.scrollIntoView();
-          btn.click();
-          return true;
-        }
-        return false;
-      });
-
-      if (contClicked3) {
-        console.log("[Onboarding] Clicked Continue on Step 3.");
-        acted = true;
-        await page.waitForTimeout(2500);
-        continue;
-      }
+      const chosenUsage = usageOptions[Math.floor(Math.random() * usageOptions.length)];
+      console.log(`[Onboarding] Selecting usage option: '${chosenUsage}'...`);
+      await clickCard(chosenUsage.slice(0, 20));
+      await page.waitForTimeout(1000);
+      await saveScreenshot(page, "metricool_onboarding_step3_usage.png");
+      await clickContinue();
+      acted = true;
+      await page.waitForTimeout(3000);
+      continue;
     }
 
-    // --- STEP 4: "Connect your social networks" / Finish screen ---
-    const finishDetected = await page.evaluate(() => {
+    // --- STEP 4 / STOP CONDITION: Brand Connection Box ("Connect social networks") ---
+    // If the survey steps 1, 2, 3 are NO LONGER detected, check if we reached brand connection box / dashboard!
+    const brandConnectionDetected = await page.evaluate(() => {
       const allText = document.body ? document.body.innerText : "";
-      if (allText.includes("Connect your social networks") || allText.includes("brandSummary") || allText.includes("Inbox")) {
-        const btns = Array.from(document.querySelectorAll("button, .v-btn, [role='button']"));
-        const finish = btns.find(b => /finish|terminar|finaliser|skip/i.test((b.innerText || "").trim()));
-        if (finish) {
-          finish.click();
-          return true;
-        }
-      }
-      return false;
+      return /connect (your )?social networks|connect social|brandSummary|connect your brand|welcome to metricool/i.test(allText);
     });
 
-    if (finishDetected) {
-      console.log("[Onboarding] Clicked Finish on final screen.");
+    if (brandConnectionDetected || page.url().includes("brandSummary") || (page.url().includes("app.metricool.com") && !page.url().includes("login") && !page.url().includes("register"))) {
+      console.log("[Onboarding] ========================================================");
+      console.log("[Onboarding] Brand connection box / Connect your social networks REACHED!");
+      console.log("[Onboarding] Stopping onboarding here and keeping browser open as instructed.");
+      console.log("[Onboarding] ========================================================");
       await page.waitForTimeout(2000);
-      break;
+      await saveScreenshot(page, "metricool_brand_connection.png");
+      return true;
     }
 
-    // Dismiss tour and welcome modals
+    // Dismiss tour and welcome popups (Skip tour, Got it) if brand connection is not yet reached
     let tourDismissed = false;
-    for (const text of ["Skip tour", "Skip", "Got it", "Understood", "Close", "Accept all"]) {
+    for (const text of ["Skip tour", "Got it", "Understood", "Close", "Accept all"]) {
       const btn = page.locator(`button:has-text('${text}'), .v-btn:has-text('${text}'), [role='button']:has-text('${text}')`).first();
       if ((await btn.count()) > 0 && (await btn.isVisible())) {
-        console.log(`[Onboarding] Dismissing modal with button: '${text}'`);
-        await btn.click({ force: true });
+        console.log(`[Onboarding] Dismissing popover modal with button: '${text}'`);
+        await btn.click({ force: true }).catch(() => {});
         await page.waitForTimeout(1000);
         tourDismissed = true;
         acted = true;
@@ -552,6 +540,8 @@ async function handleMetricoolOnboarding(page, maxWaitMs = 60000) {
   }
 
   console.log("[Onboarding] Onboarding flow completed.");
+  await saveScreenshot(page, "metricool_brand_connection.png");
+  return true;
 }
 
 // Save account to output/metricool_registered_accounts.json
@@ -931,6 +921,7 @@ async function main() {
   const context = await Camoufox(browserConfig);
 
   const page = await context.newPage();
+  await page.setViewportSize({ width: 1280, height: 850 }).catch(() => {});
 
   try {
     // =========================================================================

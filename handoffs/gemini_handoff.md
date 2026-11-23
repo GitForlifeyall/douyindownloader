@@ -7,6 +7,22 @@ This document logs all architectural decisions, code changes, pipeline updates, 
 
 ## Session History & Major Changes
 
+### [2026-11-23] Metricool Onboarding Multi-Step Automation & Brand Connection Box Stop
+1. **Root Cause Diagnosis of Role Selection Loop (Screenshot 1)**:
+   - In `tools/metricool_camoufox.mjs`, Step 1 role card selection was previously using `document.querySelectorAll("div, ...")` inside `page.evaluate()` and calling `.click()`.
+   - The selector matched the top-level parent wrapper dialog `<div>` (whose concatenated innerText started with the role text), triggering `.click()` on the non-interactive container rather than the card. Furthermore, synthetic DOM `click()` failed to trigger Vuetify/Vue 3 pointer/ripple event handlers.
+2. **Robust Multi-Modal Card Interaction**:
+   - Replaced selector logic with a 3-way interaction:
+     - Direct Playwright `getByText()` locator.
+     - Playwright mouse coordinate click: `page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)`.
+     - DOM dispatch on the exact leaf element and `.closest(".v-card")` with `['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']`.
+3. **Multi-Stage Onboarding Flow**:
+   - **Step 1 (Screenshot 1)**: Selects role card (`Content creator`, `Social media management`, `Freelancer`, `Marketing agency`) and clicks Continue if present.
+   - **Step 2 (Screenshot 2)**: Selects team size (`Just me` or `I will work with more colleagues`) and clicks Continue.
+   - **Step 3 (Screenshot 3)**: Selects usage option (`Programming and publishing of content`, `Analysis and reports`, `Create a page for your bio link`, `Conversation management`) and clicks Continue.
+   - **Stop Condition (Brand Connection Box)**: Detects `Connect your social networks` / `Connect social` / `brandSummary`, saves visual confirmation screenshot `metricool_brand_connection.png`, and stops immediately without clicking Finish or dismiss.
+   - Browser remains open for user inspection.
+
 ### [2026-11-23] Fast FB + Metricool Benchmark Script & Trajectory/Delay Bypass Mode
 1. **Dedicated Fast Benchmark Test Script (`tools/test_fb_metricool_fast.mjs`)**:
    - Created high-speed benchmark script for testing Facebook + Metricool registration with zero trajectory and zero input delays.
