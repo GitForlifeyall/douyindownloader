@@ -859,12 +859,16 @@ async function main() {
     locale: "en-US",
     geoip: false,
     firefox_user_prefs: {
+      "gfx.webrender.program-binary-disk": false,
+      "intl.accept_languages": "en-US, en",
+      "javascript.use_us_english_locale": true,
+      "browser.toolbars.bookmarks.visibility": "always",
+      "browser.urlbar.suggest.bookmark": true,
+      "browser.urlbar.suggest.history": true,
+      "browser.urlbar.suggest.topsites": true,
       "network.trr.mode": 5,
       "network.proxy.socks_remote_dns": true,
       "network.http.connection-retry-timeout": 1500,
-      "gfx.webrender.all": true,
-      "gfx.webrender.software": true,
-      "layers.acceleration.disabled": true,
     },
   };
   const effectiveProxy = ensureStickyProxy(proxyArg, email);

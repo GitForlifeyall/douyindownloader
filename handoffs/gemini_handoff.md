@@ -7,6 +7,34 @@ This document logs all architectural decisions, code changes, pipeline updates, 
 
 ## Session History & Major Changes
 
+### [2026-11-23] Root Cause & Resolution for Metricool Blank Screen / Page Not Loading
+1. **Diagnosis of Blank Page in Headful Mode**:
+   - The user observed that Facebook and IMDb loaded reliably in the Facebook launcher, but Metricool remained on a blank/unresponsive page in the Metricool launcher.
+   - Investigation revealed that `tools/metricool_camoufox.mjs` had three software rendering overrides injected:
+     - `"gfx.webrender.all": true`
+     - `"gfx.webrender.software": true`
+     - `"layers.acceleration.disabled": true`
+   - On Windows, forcing CPU software webrender and disabling hardware acceleration breaks Camoufox's DirectX swapchain compositing in headful mode, causing the window to never paint pixels to the display.
+2. **Alignment with Proven Facebook Launcher Configuration**:
+   - Removed the software rendering overrides from `firefox_user_prefs` in [tools/metricool_camoufox.mjs](file:///c:/Users/shahi/OneDrive/Desktop/douyin/tools/metricool_camoufox.mjs).
+   - Replaced with the exact working configuration from [tools/facebook_signup_camoufox.mjs](file:///c:/Users/shahi/OneDrive/Desktop/douyin/tools/facebook_signup_camoufox.mjs):
+     - `"gfx.webrender.program-binary-disk": false`
+     - `"intl.accept_languages": "en-US, en"`
+     - `"javascript.use_us_english_locale": true`
+     - `"browser.toolbars.bookmarks.visibility": "always"`
+     - `"browser.urlbar.suggest.bookmark": true`
+     - `"browser.urlbar.suggest.history": true`
+     - `"browser.urlbar.suggest.topsites": true`
+     - `"network.trr.mode": 5`
+     - `"network.proxy.socks_remote_dns": true`
+     - `"network.http.connection-retry-timeout": 1500`
+3. **Headful Verification**:
+   - Ran headful verification test connecting to `https://app.metricool.com/register` via the residential proxy.
+   - Successfully loaded the page with status 200, title "Metricool", and verified full UI rendering in `tests/test_artifacts/test_headful_metricool.png`.
+4. **Environment Cleanliness**:
+   - Force-killed any lingering background browser processes.
+   - Completely cleaned and purged `output/profiles/ErikaMcmahon` for a fresh run.
+
 ### [2026-11-23] Metricool Onboarding Multi-Step Automation & Brand Connection Box Stop
 1. **Root Cause Diagnosis of Role Selection Loop (Screenshot 1)**:
    - In `tools/metricool_camoufox.mjs`, Step 1 role card selection was previously using `document.querySelectorAll("div, ...")` inside `page.evaluate()` and calling `.click()`.
