@@ -7,6 +7,14 @@ This document logs all architectural decisions, code changes, pipeline updates, 
 
 ## Session History & Major Changes
 
+### [2026-11-24] Douyin Persistent Login & Cookie Synchronization Tool
+1. **Tool Creation (`tools/douyin_login_cookie.mjs` & `douyin_login.bat`)**:
+   - Built dedicated persistent browser launcher using Camoufox anti-detect browser (`output/profiles/douyin`).
+   - Launches headed browser directly into `https://www.douyin.com/` allowing the user to log in via QR code / SMS or solve any anti-bot captcha challenge.
+   - Upon pressing Enter in the terminal, automatically extracts all Douyin session cookies (`passport_csrf_token`, `ttwid`, `sessionid_ss`, `msToken`).
+   - Automatically writes the formatted cookie string directly into [TikTokDownloader/Volume/settings.json](file:///c:/Users/shahi/OneDrive/Desktop/douyin/TikTokDownloader/Volume/settings.json) (`"cookie": ...`), resolving the `响应内容不是有效的 JSON 数据，请尝试更新 Cookie！` error without manual copy-pasting.
+   - Saves persistent JSON backup to `output/profiles/douyin/cookies.json`.
+
 ### [2026-11-23] Root Cause & Resolution for Metricool Blank Screen / Page Not Loading
 1. **Diagnosis of Blank Page in Headful Mode**:
    - The user observed that Facebook and IMDb loaded reliably in the Facebook launcher, but Metricool remained on a blank/unresponsive page in the Metricool launcher.
