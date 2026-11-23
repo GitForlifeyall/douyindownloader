@@ -109,6 +109,42 @@ function parseProxy(proxyStr) {
   return { server: `http://${clean}` };
 }
 
+// Oxylabs Sticky Session Proxy Protocol
+function ensureStickyProxy(proxyStr, seed = null) {
+  if (!proxyStr) return proxyStr;
+  let clean = String(proxyStr).trim().replace(/^https?:\/\//i, "");
+  if (!clean.includes("@")) return `http://${clean}`;
+  const [auth, hostPort] = clean.split("@");
+  let [username, password] = auth.split(":");
+  if (!username) return `http://${clean}`;
+
+  if (hostPort.includes("oxylabs.io") || username.startsWith("customer-")) {
+    if (!username.includes("sessid") && !username.includes("session")) {
+      const seedHash = seed ? crypto.createHash("md5").update(String(seed)).digest("hex").slice(0, 4) : "";
+      const sessId = `${seedHash}${crypto.randomBytes(3).toString("hex")}`;
+      username = `${username}-sessid-${sessId}-sesstime-30`;
+    }
+  }
+  return `http://${username}:${password}@${hostPort}`;
+}
+
+// Pre-signup organic browsing warmup (5-10s)
+async function warmupOrganicBrowsing(page) {
+  const warmupSites = [
+    { name: "IMDb", url: "https://www.imdb.com/" },
+    { name: "Wikipedia", url: "https://www.wikipedia.org/" },
+  ];
+  const site = warmupSites[Math.floor(Math.random() * warmupSites.length)];
+  console.log(`[Warmup] Pre-flight organic socket warmup on ${site.name} (${site.url})...`);
+  try {
+    await page.goto(site.url, { waitUntil: "domcontentloaded", timeout: 25000 });
+    console.log(`[Warmup] Successfully connected to ${site.name}. TLS & proxy connection pool warmed up.`);
+    await page.waitForTimeout(3000);
+  } catch (err) {
+    console.warn(`[Warmup Warning] Warmup visit note: ${err.message}`);
+  }
+}
+
 function deriveTimezoneFromProxy(proxyStr) {
   const p = (proxyStr || "").toLowerCase();
   if (p.includes("alabama") || p.includes("central") || p.includes("chicago")) return { tz: "America/Chicago", region: "US", lang: "en" };
@@ -820,7 +856,8 @@ async function main() {
     block_webrtc: true,
     i_know_what_im_doing: true,
     exclude_addons: ["UBO"],
-    locale: `${chosenLang}-${chosenRegion}`,
+    locale: "en-US",
+    geoip: false,
     firefox_user_prefs: {
       "network.trr.mode": 5,
       "network.proxy.socks_remote_dns": true,
@@ -829,21 +866,11 @@ async function main() {
       "gfx.webrender.software": true,
       "layers.acceleration.disabled": true,
     },
-    config: {
-      timezone: chosenTz,
-      "locale:region": chosenRegion,
-      "locale:language": chosenLang,
-      "locale:all": `${chosenLang}-${chosenRegion}, ${chosenLang}`,
-      ...(persona && persona["canvas:seed"] ? {
-        "canvas:seed": persona["canvas:seed"],
-        "audio:seed": persona["audio:seed"],
-        "fonts:spacing_seed": persona["fonts:spacing_seed"],
-      } : {})
-    }
   };
-  const parsedProxy = parseProxy(proxyArg);
+  const effectiveProxy = ensureStickyProxy(proxyArg, email);
+  const parsedProxy = parseProxy(effectiveProxy);
   if (parsedProxy) {
-    console.log(`[Camoufox] Activating Residential Proxy: ${parsedProxy.server} (User: ${parsedProxy.username})...`);
+    console.log(`[Camoufox] Activating Residential Sticky Proxy: ${parsedProxy.server} (User: ${parsedProxy.username})...`);
     browserConfig.proxy = parsedProxy;
     if (exitIp) {
       console.log(`[Camoufox] Pinned verified exit IP: ${exitIp} (local GeoIP database alignment)`);
@@ -853,12 +880,12 @@ async function main() {
     }
   }
 
-  // Clear stale Firefox locks
-  for (const lock of ["parent.lock", "lock", ".parentlock"]) {
-    const lockPath = path.join(profileDir, lock);
-    if (fs.existsSync(lockPath)) {
-      try { fs.unlinkSync(lockPath); } catch (e) { }
-    }
+  // Clear stale runtime locks and temporary caches
+  for (const sub of ["parent.lock", "lock", ".parentlock", "cache2", "startupCache", "sessionstore.jsonlz4"]) {
+    try {
+      const p = path.join(profileDir, sub);
+      if (fs.existsSync(p)) fs.rmSync(p, { recursive: true, force: true });
+    } catch (e) { }
   }
 
   const context = await Camoufox(browserConfig);
@@ -866,6 +893,10 @@ async function main() {
   const page = (context.pages && context.pages().length > 0) ? context.pages()[0] : await context.newPage();
   await page.setViewportSize({ width: 1280, height: 850 }).catch(() => {});
   await page.bringToFront().catch(() => {});
+
+  if (!hasFlag("--skip-warmup")) {
+    await warmupOrganicBrowsing(page);
+  }
 
   try {
     // =========================================================================
