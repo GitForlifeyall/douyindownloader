@@ -44,8 +44,17 @@ if (!action) action = "login";
 let email = getArg("--email");
 let password = getArg("--password");
 const profileDirArg = getArg("--profile-dir");
-const clientId = getArg("--client-id");
-const refreshToken = getArg("--refresh-token");
+let clientId = getArg("--client-id");
+let refreshToken = getArg("--refresh-token");
+
+const accountArg = getArg("--account");
+if (accountArg && accountArg.includes("|")) {
+  const parts = accountArg.split("|");
+  if (!email) email = parts[0]?.trim();
+  if (!password) password = parts[1]?.trim();
+  if (!refreshToken) refreshToken = parts[2]?.trim();
+  if (!clientId) clientId = (parts[3] || "9e5f94bc-e8a4-4e73-b8be-63364c29d753").trim();
+}
 const DEFAULT_PROXY = "customer-resi_4edb25d7:fo4ENfj4pMx+@pr.oxylabs.io:7777";
 const proxyArg = getArg("--proxy", DEFAULT_PROXY);
 const exitIp = getArg("--exit-ip");
