@@ -175,10 +175,7 @@ def _generate_word_synced_movie_ass(
         cs = min(99, int(round((sec - int(sec)) * 100)))
         return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
-    # Extract clean script words preserving exact spelling + fallback block windows
-    script_words: List[str] = []
-    fallback_events: List[Tuple[float, float, str]] = []
-
+    # Extract clean script words preserving exact spelling and chunk into snappy 2-3 words
     is_devanagari = any(
         "\u0900" <= ch <= "\u097f"
         for p in aligned_plan[:10]
@@ -196,6 +193,7 @@ def _generate_word_synced_movie_ass(
             except Exception:
                 to_hinglish_fn = None
 
+    raw_chunk_events: List[Tuple[float, float, str]] = []
     for p in aligned_plan:
         txt = re.sub(r"\[[a-zA-Z\s]+\]", "", str(p.get("text", ""))).strip()
         if to_hinglish_fn:
@@ -204,84 +202,43 @@ def _generate_word_synced_movie_ass(
         words_in_block = [w for w in words_in_block if w]
         if not words_in_block:
             continue
+
+        # Chunk into high-retention 2-3 word phrases (max 16 chars or 3 words)
+        chunks: List[str] = []
+        curr: List[str] = []
+        for w in words_in_block:
+            cand = " ".join(curr + [w])
+            if curr and (len(cand) > 16 or len(curr) >= 3):
+                chunks.append(" ".join(curr))
+                curr = [w]
+            else:
+                curr.append(w)
+        if curr:
+            chunks.append(" ".join(curr))
+
         b_s = float(p["raw_start"]) / uniform_audio_tempo
         b_e = float(p["raw_end"]) / uniform_audio_tempo
-        step = max(0.05, b_e - b_s) / len(words_in_block)
-        for k, w in enumerate(words_in_block):
-            script_words.append(w)
-            fallback_events.append((b_s + k * step, b_s + (k + 1) * step, w))
+        dur = max(0.4, b_e - b_s)
+        total_chars = max(1, sum(len(c) for c in chunks))
+        cur_t = b_s
+        for c in chunks:
+            c_dur = dur * (len(c) / float(total_chars))
+            raw_chunk_events.append((cur_t, cur_t + c_dur, c))
+            cur_t += c_dur
 
-    word_events: List[Tuple[float, float, str]] = []
-    whisper_lang = "en" if str(target_lang or "").strip().lower().startswith("en") else None
-    try:
-        w_model = _get_word_align_whisper_model()
-        segs, _ = w_model.transcribe(
-            str(aligned_voice_wav),
-            language=whisper_lang,
-            beam_size=1,
-            word_timestamps=True,
-            vad_filter=True,
-        )
-        w_items = []
-        for seg in segs:
-            for w in (seg.words or []):
-                tok = w.word.strip()
-                norm = re.sub(r"[^a-z0-9]", "", tok.lower())
-                if norm:
-                    w_items.append((float(w.start), float(w.end), norm, tok))
-
-        if script_words and w_items:
-            s_norms = [re.sub(r"[^a-z0-9]", "", w.lower()) for w in script_words]
-            w_norms = [x[2] for x in w_items]
-            sm = difflib.SequenceMatcher(None, s_norms, w_norms)
-            mapped: List[Optional[Tuple[float, float, str]]] = [None] * len(script_words)
-            for tag, i1, i2, j1, j2 in sm.get_opcodes():
-                if tag == "equal":
-                    for k in range(i2 - i1):
-                        mapped[i1 + k] = (w_items[j1 + k][0], w_items[j1 + k][1], script_words[i1 + k])
-                elif tag == "replace" and (i2 - i1) > 0 and (j2 - j1) > 0:
-                    fb_s = fallback_events[i1][0]
-                    fb_e = fallback_events[i2 - 1][1]
-                    span_s = max(fb_s - 0.5, w_items[j1][0])
-                    span_e = min(fb_e + 0.5, w_items[j2 - 1][1])
-                    if span_e <= span_s or (span_e - span_s) > max(1.0 * (i2 - i1), (fb_e - fb_s) + 1.0):
-                        span_s, span_e = fb_s, fb_e
-                    n = i2 - i1
-                    step = max(0.04, span_e - span_s) / n
-                    for k in range(n):
-                        mapped[i1 + k] = (span_s + k * step, span_s + (k + 1) * step, script_words[i1 + k])
-                elif tag == "delete" and (i2 - i1) > 0:
-                    fb_s = fallback_events[i1][0]
-                    fb_e = fallback_events[i2 - 1][1]
-                    span_s = max(fb_s, w_items[j1 - 1][1] if j1 > 0 else fb_s)
-                    span_e = min(fb_e, w_items[j1][0] if j1 < len(w_items) else fb_e)
-                    n = i2 - i1
-                    if span_e <= span_s or (span_e - span_s) > max(0.8 * n, (fb_e - fb_s) + 0.6):
-                        span_s, span_e = fb_s, fb_e
-                    step = max(0.04, span_e - span_s) / n
-                    for k in range(n):
-                        mapped[i1 + k] = (span_s + k * step, span_s + (k + 1) * step, script_words[i1 + k])
-            word_events = [m for m in mapped if m is not None]
-            print(f"[Block Aligner] 100% Word-Synced Movie Captions: mapped {len(word_events)}/{len(script_words)} script words via Whisper timestamps.")
-        elif w_items:
-            word_events = [(st, en, tok.strip(".,;:!?\"'—–-…").upper()) for st, en, _, tok in w_items if tok.strip(".,;:!?\"'—–-…")]
-    except Exception as e:
-        print(f"[Block Aligner] Notice: Whisper word sync unavailable ({e}); using aligned fallback timing.")
-
-    if not word_events:
-        word_events = fallback_events
-
-    # Tighten consecutive transitions smoothly without overlap while preserving real pauses (>120ms)
+    # Sort strictly by start time and enforce 100% zero-overlap guarantee
+    raw_chunk_events.sort(key=lambda x: x[0])
     normalized_events: List[Tuple[float, float, str]] = []
-    for idx_w, (st, en, wd) in enumerate(word_events):
-        en = max(st + 0.05, en)
-        if idx_w + 1 < len(word_events):
-            next_st = word_events[idx_w + 1][0]
-            if next_st < en:
-                en = max(st + 0.04, next_st)
-            elif (next_st - en) <= 0.12:
+    for idx_w, (st, en, wd) in enumerate(raw_chunk_events):
+        if idx_w + 1 < len(raw_chunk_events):
+            next_st = raw_chunk_events[idx_w + 1][0]
+            # Strictly prevent overlap: current event must end before or at next event start
+            en = min(en, next_st)
+            # Smoothly bridge tiny gaps (<100ms) to eliminate caption flicker
+            if next_st > en and (next_st - en) <= 0.10:
                 en = next_st
-        normalized_events.append((st, en, wd))
+        if en > st + 0.04:
+            normalized_events.append((st, en, wd))
 
     ratio_norm = normalize_aspect_ratio(ratio)
     if ratio_norm == "square":
@@ -319,6 +276,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         for st, en, wd in normalized_events
     ]
     ass_path.write_text(ass_header + "\n".join(lines) + "\n", encoding="utf-8")
+    print(f"[Block Aligner] Generated {len(normalized_events)} clean, non-overlapping Movie ASS captions -> {ass_path.name}")
     return ass_path
 
 
@@ -358,7 +316,7 @@ def _next_fallback_engine(current_engine: str, visited: Optional[set] = None) ->
     if cur == "google" and "elevenlabs" not in visited and get_active_elevenlabs_keys():
         return "elevenlabs"
 
-    order = ["elevenlabs", "google", "sarvam", "chirp", "kokoro"]
+    order = ["elevenlabs", "sarvam", "edge", "google", "chirp", "kokoro"]
     if cur not in order:
         return "elevenlabs" if get_active_elevenlabs_keys() else "google"
     idx = order.index(cur)
@@ -586,20 +544,29 @@ def synthesize_all_blocks(
                 time.sleep(0.05 * (i - 1))  # 50ms staggered worker launch to prevent simultaneous IP burst flags
             idx = b.get("index", i)
             text = b.get("text", "").strip()
-            text_hash = hashlib.md5(text.encode("utf-8")).hexdigest()[:8]
+            prev_text = blocks[i - 2].get("text", "").strip() if i >= 2 else ""
+            nxt_text = blocks[i].get("text", "").strip() if i < len(blocks) else ""
+            ctx_sig = f"{prev_text[-60:]}|{text}|{nxt_text[:60]}"
+            text_hash = hashlib.md5(ctx_sig.encode("utf-8")).hexdigest()[:8]
             c_file = cache_dir / f"block_elevenlabs_{active_speaker.lower()}_{idx:03d}_{text_hash}.mp3"
             if c_file.exists() and c_file.stat().st_size > 1000:
                 raw_audio, sr = sf.read(str(c_file))
                 if raw_audio.ndim > 1:
                     raw_audio = raw_audio.mean(axis=1)
-                trimmed = trim_audio_silence(raw_audio, threshold=0.010, pad_samples=int(0.01 * sr))
+                trimmed = trim_audio_silence(raw_audio, threshold=0.015, pad_samples=int(0.004 * sr))
                 dur = len(trimmed) / sr
                 return i - 1, {"block": b, "audio": trimmed, "sr": sr, "duration": dur, "engine": "elevenlabs"}
 
             for attempt in range(8):
                 try:
-                    raw_audio, sr = tts.synthesize_single_block(text, voice=active_speaker, cache_path=c_file)
-                    trimmed = trim_audio_silence(raw_audio, threshold=0.010, pad_samples=int(0.01 * sr))
+                    raw_audio, sr = tts.synthesize_single_block(
+                        text,
+                        voice=active_speaker,
+                        cache_path=c_file,
+                        previous_text=prev_text or None,
+                        next_text=nxt_text or None,
+                    )
+                    trimmed = trim_audio_silence(raw_audio, threshold=0.015, pad_samples=int(0.004 * sr))
                     dur = len(trimmed) / sr
                     return i - 1, {"block": b, "audio": trimmed, "sr": sr, "duration": dur, "engine": "elevenlabs"}
                 except Exception as e:
@@ -618,6 +585,56 @@ def synthesize_all_blocks(
                     print(f"  ✓ Block #{b.get('index', pos+1):02d} ready: {item['duration']:.2f}s ElevenLabs v4 Turbo speech (Orig scene: {b['end']-b['start']:.2f}s)")
         except Exception as e:
             return _cascade_to_next("elevenlabs", str(e)[:120], "block_elevenlabs_*.mp3")
+
+    elif eng_norm in ("edge", "edge_tts", "edgetts"):
+        import asyncio
+        import edge_tts
+        is_en = str(target_lang or "").strip().lower().startswith("en")
+        default_edge_voice = "en-US-ChristopherNeural" if is_en else "hi-IN-MadhurNeural"
+        edge_voice = voice if (voice and "neural" in voice.lower()) else default_edge_voice
+
+        async def _async_synth(spoken_text: str, out_file: Path):
+            comm = edge_tts.Communicate(spoken_text, edge_voice, rate="+5%")
+            await comm.save(str(out_file))
+
+        def _synth_edge_block(i: int, b: Dict[str, Any]):
+            idx = b.get("index", i)
+            raw_text = b.get("text", "").strip()
+            spoken_text, _ = extract_audio_tags_and_clean_text(raw_text)
+            spoken_text = spoken_text or raw_text
+            text_hash = hashlib.md5(f"{edge_voice}:{spoken_text}".encode("utf-8")).hexdigest()[:8]
+            c_file = cache_dir / f"block_edge_{edge_voice.lower()}_{idx:03d}_{text_hash}.mp3"
+            if c_file.exists() and c_file.stat().st_size > 1000:
+                raw_audio, sr = sf.read(str(c_file))
+                if raw_audio.ndim > 1:
+                    raw_audio = raw_audio.mean(axis=1)
+                trimmed = trim_audio_silence(raw_audio, threshold=0.010, pad_samples=int(0.01 * sr))
+                dur = len(trimmed) / sr
+                return i - 1, {"block": b, "audio": trimmed, "sr": sr, "duration": dur, "engine": "edge"}
+
+            for attempt in range(4):
+                try:
+                    asyncio.run(_async_synth(spoken_text, c_file))
+                    raw_audio, sr = sf.read(str(c_file))
+                    if raw_audio.ndim > 1:
+                        raw_audio = raw_audio.mean(axis=1)
+                    trimmed = trim_audio_silence(raw_audio, threshold=0.010, pad_samples=int(0.01 * sr))
+                    dur = len(trimmed) / sr
+                    return i - 1, {"block": b, "audio": trimmed, "sr": sr, "duration": dur, "engine": "edge"}
+                except Exception as e:
+                    time.sleep(1.0)
+            raise RuntimeError(f"Failed to synthesize EdgeTTS block #{idx:02d}")
+
+        try:
+            with ThreadPoolExecutor(max_workers=4) as ex:
+                futures = [ex.submit(_synth_edge_block, i, b) for i, b in enumerate(blocks, 1)]
+                for fut in as_completed(futures):
+                    pos, item = fut.result()
+                    results[pos] = item
+                    b = item["block"]
+                    print(f"  ✓ Block #{b.get('index', pos+1):02d} ready: {item['duration']:.2f}s EdgeTTS speech (Orig scene: {b['end']-b['start']:.2f}s)")
+        except Exception as e:
+            return _cascade_to_next("edge", str(e)[:120], "block_edge_*.mp3")
 
     elif eng_norm in ("chirp", "google_chirp", "gcloud_chirp"):
         import requests
@@ -746,12 +763,31 @@ def _plan_movie_timeline(
     applies uniform speech speedup only when speech overflows `vid_dur`, and pads audio to `max(vid_dur, last_end)`.
     Returns `(aligned_plan, target_timeline_dur, speech_tempo)`.
     """
+    def _block_gap(prev_item: Dict[str, Any]) -> float:
+        prev_txt = str(prev_item["block"].get("text", "") or "").strip()
+        # Zero gap when a sentence continues mid-thought across blocks; brief breath gap at sentence end
+        if prev_txt and not prev_txt.endswith((".", "!", "?", "।")):
+            return 0.0
+        return min_gap
+
+    def _next_start(curr: float, idx_1based: int, orig_start: float) -> float:
+        if idx_1based == 1:
+            return max(0.02, orig_start)
+        prev_item = block_items[idx_1based - 2]
+        prev_orig_end = float(prev_item["block"]["end"])
+        orig_gap = max(0.0, orig_start - prev_orig_end)
+        req_gap = _block_gap(prev_item)
+        # Only anchor forward to orig_start when the original video had a real silent pause (>0.35s)
+        if orig_gap > 0.35:
+            return max(curr + req_gap, orig_start)
+        return curr + req_gap
+
     def _simulate_end(scale: float) -> float:
         curr = 0.0
         for idx, item in enumerate(block_items, 1):
             orig_start = max(0.0, float(item["block"]["start"]))
             dur_s = max(0.1, float(item["duration"]) / scale)
-            start_new = max(0.02, orig_start) if idx == 1 else max(curr + min_gap, orig_start)
+            start_new = _next_start(curr, idx, orig_start)
             curr = start_new + dur_s
         return curr
 
@@ -807,7 +843,7 @@ def _plan_movie_timeline(
         orig_dur = max(0.1, orig_end - orig_start)
         speech_dur = max(0.1, float(item["duration"]))
 
-        start_new = max(0.02, orig_start) if idx == 1 else max(current_timeline_time + min_gap, orig_start)
+        start_new = _next_start(current_timeline_time, idx, orig_start)
         gap_before = start_new - current_timeline_time
         end_new = start_new + speech_dur
         current_timeline_time = end_new
@@ -923,7 +959,7 @@ def align_video_and_audio_blocks(
             vid_dur=vid_dur,
             work_dir=work_dir,
             tts_speed=tts_speed,
-            min_gap=0.06,
+            min_gap=0.03,
         )
     else:
         # Plan Unscaled Timeline with Proportional Drift Redistribution (Option 3)
@@ -1334,11 +1370,21 @@ def align_video_and_audio_blocks(
             v_w, v_h = 1080, 1080
 
     print(f"\n[Block Aligner] Muxing final video to: {output_video_path} (Target duration: {target_video_dur:.2f}s)...")
-    escaped_ass = str(aligned_ass_path.resolve()).replace("\\", "/").replace(":", "\\:")
+    try:
+        rel_ass = str(aligned_ass_path.resolve().relative_to(Path.cwd().resolve())).replace("\\", "/")
+    except Exception:
+        rel_ass = str(aligned_ass_path).replace("\\", "/")
     fonts_dir_path = root_dir / "assets" / "fonts"
-    fonts_arg = f":fontsdir='{str(fonts_dir_path.resolve()).replace(chr(92), '/').replace(':', chr(92) + ':')}'" if fonts_dir_path.exists() else ""
+    try:
+        rel_fonts = str(fonts_dir_path.resolve().relative_to(Path.cwd().resolve())).replace("\\", "/") if fonts_dir_path.exists() else ""
+    except Exception:
+        rel_fonts = str(fonts_dir_path).replace("\\", "/") if fonts_dir_path.exists() else ""
+    fonts_arg = f":fontsdir='{rel_fonts}'" if rel_fonts else ""
     if burn_subtitles and not smart_crop:
-        vf_post.append(f"subtitles='{escaped_ass}'{fonts_arg}")
+        if str(aligned_ass_path).endswith(".ass"):
+            vf_post.append(f"ass='{rel_ass}'{fonts_arg}")
+        else:
+            vf_post.append(f"subtitles='{rel_ass}'{fonts_arg}")
     elif smart_crop:
         print("[Block Aligner] Smart Crop Mode: Bottom subtitle burn disabled (clean cropped portrait layout).")
 
@@ -1413,7 +1459,7 @@ def align_video_and_audio_blocks(
         cmd_mux_base.extend(["-map", "0:v:0", "-map", "1:a:0"])
 
     tail_flags = [
-        "-c:a", "aac", "-b:a", "192k",
+        "-c:a", "aac", "-ac", "2", "-ar", "44100", "-b:a", "192k",
         "-t", f"{target_video_dur:.3f}",
         "-shortest",
         str(output_video_path),

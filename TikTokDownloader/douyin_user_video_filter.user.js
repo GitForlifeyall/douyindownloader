@@ -9,7 +9,7 @@
 // @run-at       document-idle
 // ==/UserScript==
 
-(function() {
+(function () {
     'use strict';
 
     /* ------------------------------------------------------------------ *
@@ -17,11 +17,11 @@
      * ------------------------------------------------------------------ */
 
     const SEL = {
-        container : 'li.AhHE71Bq.F4b7sztk.zvGw4rBu',   // video card <li>
-        link      : 'a[href*="/video/"]',                // video anchor
-        title     : '.EB3BkdQ8, .frUrWD64.RpuhoKEt',    // video title / description
-        likes     : '.HycZGr_s .BP1CQkLg',              // like-count span
-        cover     : '.iWV3dpj1.wzoPLIem img'            // thumbnail (used as fallback)
+        container: 'li.AhHE71Bq.F4b7sztk.zvGw4rBu',   // video card <li>
+        link: 'a[href*="/video/"]',                // video anchor
+        title: '.EB3BkdQ8, .frUrWD64.RpuhoKEt',    // video title / description
+        likes: '.HycZGr_s .BP1CQkLg',              // like-count span
+        cover: '.iWV3dpj1.wzoPLIem img'            // thumbnail (used as fallback)
     };
 
     // Douyin renders like counts like "1405", "1.2万", "3.5k"
@@ -154,7 +154,7 @@
             const { d: duration, text: durationText } = findDurationInCard(li);
 
             list.push({
-                element : li,
+                element: li,
                 url,
                 title,
                 likes,
@@ -175,10 +175,10 @@
     function getFilterValues() {
         if (!ui) return null;
         return {
-            minLikes : parseInt(ui.minLikes.value, 10) || 0,
-            maxLikes : ui.maxLikes.value === '' ? Infinity : parseInt(ui.maxLikes.value, 10),
-            minDur   : ui.minDur.value === '' ? 0 : parseInt(ui.minDur.value, 10),
-            maxDur   : ui.maxDur.value === '' ? Infinity : parseInt(ui.maxDur.value, 10)
+            minLikes: parseInt(ui.minLikes.value, 10) || 0,
+            maxLikes: ui.maxLikes.value === '' ? Infinity : parseInt(ui.maxLikes.value, 10),
+            minDur: ui.minDur.value === '' ? 0 : parseInt(ui.minDur.value, 10),
+            maxDur: ui.maxDur.value === '' ? Infinity : parseInt(ui.maxDur.value, 10)
         };
     }
 
@@ -357,15 +357,15 @@
 
         ui = {
             panel,
-            minLikes : panel.querySelector('#dy-min-likes'),
-            maxLikes : panel.querySelector('#dy-max-likes'),
-            minDur   : panel.querySelector('#dy-min-dur'),
-            maxDur   : panel.querySelector('#dy-max-dur'),
-            count    : panel.querySelector('#dy-count'),
-            scanBtn  : panel.querySelector('#dy-scan-btn'),
-            scanStatus : panel.querySelector('#dy-scan-status'),
-            copyBtn  : panel.querySelector('#dy-copy-btn'),
-            urlsTextarea : panel.querySelector('#dy-urls-textarea')
+            minLikes: panel.querySelector('#dy-min-likes'),
+            maxLikes: panel.querySelector('#dy-max-likes'),
+            minDur: panel.querySelector('#dy-min-dur'),
+            maxDur: panel.querySelector('#dy-max-dur'),
+            count: panel.querySelector('#dy-count'),
+            scanBtn: panel.querySelector('#dy-scan-btn'),
+            scanStatus: panel.querySelector('#dy-scan-status'),
+            copyBtn: panel.querySelector('#dy-copy-btn'),
+            urlsTextarea: panel.querySelector('#dy-urls-textarea')
         };
 
         panel.querySelector('.close').addEventListener('click', () => panel.style.display = 'none');

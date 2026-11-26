@@ -190,7 +190,9 @@ class ElevenLabsTTS:
         voice: Optional[str] = None,
         language_code: Optional[str] = None,
         cache_path: Optional[Path] = None,
-        max_retries: int = 10
+        max_retries: int = 10,
+        previous_text: Optional[str] = None,
+        next_text: Optional[str] = None,
     ) -> Tuple[np.ndarray, int]:
         """
         Synthesize a single subtitle line with automatic retry, model fallback,
@@ -213,8 +215,8 @@ class ElevenLabsTTS:
         clean_text = re.sub(r"[\s—–\-~…\.]+$", "", clean_text).strip()
         clean_text = re.sub(r"\s*[—–\-~]\s*", ", ", clean_text).strip()
         clean_text = " ".join(clean_text.split())
-        # Ensure a clean closing punctuation so the vocoder knows the sentence has finished
-        if clean_text and not clean_text.endswith((".", "!", "?", "।")):
+        # Only force a closing sentence period if there is no continuing next_text
+        if clean_text and not next_text and not clean_text.endswith((".", "!", "?", "।", ",")):
             clean_text += "।" if current_lang.startswith("hi") else "."
         if not clean_text:
             return np.zeros(2400, dtype=np.float32), 24000
@@ -240,15 +242,21 @@ class ElevenLabsTTS:
             client, active_key = self.get_client()
 
             try:
-                # Convert text to speech via ElevenLabs v4 with native Hindi language support
-                audio_stream = client.text_to_speech.convert(
-                    voice_id=voice_id,
-                    text=clean_text,
-                    model_id=current_model,
-                    voice_settings=voice_settings,
-                    language_code=current_lang,
-                    output_format="mp3_44100_128"
-                )
+                # Convert text to speech via ElevenLabs v4 with previous/next context for continuous prosody
+                convert_kwargs = {
+                    "voice_id": voice_id,
+                    "text": clean_text,
+                    "model_id": current_model,
+                    "voice_settings": voice_settings,
+                    "language_code": current_lang,
+                    "output_format": "mp3_44100_128",
+                }
+                if previous_text and str(previous_text).strip():
+                    convert_kwargs["previous_text"] = " ".join(str(previous_text).strip().split())
+                if next_text and str(next_text).strip():
+                    convert_kwargs["next_text"] = " ".join(str(next_text).strip().split())
+
+                audio_stream = client.text_to_speech.convert(**convert_kwargs)
 
                 # Collect all bytes from generator
                 raw_bytes = b"".join(audio_stream)

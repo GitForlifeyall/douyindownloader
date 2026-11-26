@@ -7,6 +7,90 @@ This document logs all architectural decisions, code changes, pipeline updates, 
 
 ## Session History & Major Changes
 
+### [2026-11-24] Full Custom Pipeline: Italian Parmesan Bank Collateral Douyin Video
+1. **Target Video**:
+   - URL: `https://www.douyin.com/jingxuan?modal_id=7700869104172846345` (Clean slug: `视频 - 舌尖.味纪 - 世界上唯一一种除了吃还能抵押银`).
+   - Title: `世界上唯一一种除了吃，还能抵押银行贷款的食物，你见过吗？` (Parmigiano-Reggiano / Parmesan Cheese).
+2. **Workflow Completed**:
+   - **Download**: Successfully downloaded 1920x1080 MP4 via `DownloaderAPI` into `input/`.
+   - **Transcription**: Transcribed 41 blocks via Faster-Whisper into [output/subtitles/视频 - 舌尖.味纪 - 世界上唯一一种除了吃还能抵押银_raw.srt](file:///c:/Users/shahi/OneDrive/Desktop/douyin/output/subtitles/视频%20-%20舌尖.味纪%20-%20世界上唯一一种除了吃还能抵押银_raw.srt).
+   - **Custom Script Transcreation**: Authored all 41 blocks directly on our own in high-retention, authentic conversational Hindi with English loanwords (`Bank`, `Loan`, `Gold`, `Parmesan Cheese`, `Vault`, `Cash`, `Years`, `Production`, `Fresh Milk`, `Wheel`, `Preservatives`, `Structure`, `Inspector`, `Hammer`, `Pasta`, `Pizza`) and ElevenLabs vocal cues (`[excited]`, `[curious]`, `[shocked]`, `[gasps]`, `[sighs]`). Zero Gemini API keys called. Saved to [output/subtitles/视频 - 舌尖.味纪 - 世界上唯一一种除了吃还能抵押银_hindi.srt](file:///c:/Users/shahi/OneDrive/Desktop/douyin/output/subtitles/视频%20-%20舌尖.味纪%20-%20世界上唯一一种除了吃还能抵押银_hindi.srt).
+   - **TTS & Single-Pass Mux**: Synthesized speech across all 41 blocks via **ElevenLabs v4 Turbo** (`roger` @ 1.0x). Movie speech span 162.94s, uniform scaling 1.2283x, locked duration 162.94s, -14 LUFS broadcast mastering. Rendered Reels blurred background (`1080x1920`) with 1.40x foreground and 208 word-synced bold ASS captions (single horizontal line, zero overlap).
+   - **Filename Compliant**: Renamed to [output/视频 - 舌尖.味纪 - 世界上唯一一种除了吃还能抵押银.mp4](file:///c:/Users/shahi/OneDrive/Desktop/douyin/output/视频%20-%20舌尖.味纪%20-%20世界上唯一一种除了吃还能抵押银.mp4) (30 chars $\le 49$ chars limit, 117 MB).
+   - **Google Drive Sync**: Backed up to `G:\My Drive\douyin\final_videos\视频 - 舌尖.味纪 - 世界上唯一一种除了吃还能抵押银.mp4`.
+
+### [2026-11-24] Subtitle Collision Stacking Fix & Movie Mode Filename Enforcement
+1. **Vertical Subtitle Ladder Root Cause**:
+   - In `dubbing_studio/block_aligner.py` (`_generate_word_synced_movie_ass`), word-level Whisper alignment stripped non-Latin Devanagari/Urdu tokens, causing opcode fallback to assign overlapping start/end times across up to 12 consecutive words.
+   - `libass` Anti-Collision rule stacked overlapping dialogue events vertically from bottom to top, creating a 12-line vertical text column occupying the entire screen height.
+   - Additionally, Windows FFmpeg absolute paths with drive letters (e.g. `subtitles='C\:/...'`) failed with `Unable to parse original_size option value` because FFmpeg's filter parser splits on colons.
+2. **Architectural Fixes**:
+   - **Horizontal 2–3 Word Chunking**: Replaced brittle single-word alignment in `dubbing_studio/block_aligner.py` with high-retention 2–3 word phrase chunks (max 16 chars or 3 words), strictly partitioned by speech duration across each scene block.
+   - **Zero-Overlap Temporal Clamping**: Clamped each chunk's end time to `min(en, next_st)` with 100ms gap bridging. Guaranteed 100% non-overlapping dialogue events so `libass` never stacks subtitles vertically.
+   - **Windows FFmpeg Filter Path Fix**: Replaced absolute `C:/...` paths in `block_aligner.py` with relative POSIX paths (`rel_ass` and `rel_fonts`), resolving filter option parsing failure in `libass`.
+   - **Filename Strict Cap Enforced in Pipeline**: Updated `dubbing_studio/pipeline.py` to strip parenthetical clutter (`(3D Animation...)`, `[Viral Movie]`, `#shorts`) and strictly enforce the `<= 49` character hard cap for final filenames.
+3. **Verification & Delivery**:
+   - Video: [output/视频 - 熊猫观影.mp4](file:///c:/Users/shahi/OneDrive/Desktop/douyin/output/视频%20-%20熊猫观影.mp4) (13 chars $\le 49$ chars, 85.2 MB, 134.38s).
+   - Synced to Google Drive: `G:\My Drive\douyin\final_videos\视频 - 熊猫观影.mp4`.
+   - Extracted visual verification frames (`verify_b1.png`, `verify_b19.png`, `verify_b20.png`) confirming clean, centered, single-line horizontal Montserrat ExtraBold captions with zero vertical stacking.
+
+### [2026-11-24] Full Custom Pipeline: Ancient Trailing Skirts Douyin Video
+1. **Target Video**:
+   - URL: `https://www.douyin.com/jingxuan?modal_id=7710998696566411954` (Clean slug: `视频 - 羊得草 - 古代女性的长裙儿都拖着地是不是`).
+   - Title: `古代女性的长裙儿都拖着地，是不是每天都要洗？`
+2. **Workflow Completed**:
+   - **Download**: Successfully extracted 1920x1080 MP4 via `DownloaderAPI` into `input/`.
+   - **Transcription**: Transcribed 47 blocks via Faster-Whisper into [output/subtitles/视频 - 羊得草 - 古代女性的长裙儿都拖着地是不是_raw.srt](file:///c:/Users/shahi/OneDrive/Desktop/douyin/output/subtitles/视频%20-%20羊得草%20-%20古代女性的长裙儿都拖着地是不是_raw.srt).
+   - **Custom Translation**: Transcreated all 47 blocks on our own in viral, authentic conversational Hindi (free of awkward English jargon) into [output/subtitles/视频 - 羊得草 - 古代女性的长裙儿都拖着地是不是_hindi.srt](file:///c:/Users/shahi/OneDrive/Desktop/douyin/output/subtitles/视频%20-%20羊得草%20-%20古代女性的长裙儿都拖着地是不是_hindi.srt).
+   - **TTS Engine Fallback & Edge-TTS Integration**: Added `edge-tts>=7.3.1` engine integration in `dubbing_studio/block_aligner.py` and [requirements.txt](file:///c:/Users/shahi/OneDrive/Desktop/douyin/requirements.txt). Synthesized all 47 blocks with crystal clear neural Hindi (`hi-IN-MadhurNeural`).
+   - **Video Transformation**: Rendered Reels blurred background (`1080x1920` with 1.40x foreground and word-synced bold ASS subtitles). Duration: 194.95s.
+   - **Filename Compliant**: Renamed to [output/Ancient Trailing Skirts Washed Every Day.mp4](file:///c:/Users/shahi/OneDrive/Desktop/douyin/output/Ancient%20Trailing%20Skirts%20Washed%20Every%20Day.mp4) (44 chars $\le 49$ chars limit, 120.88 MB).
+
+### [2026-11-24] Viral Script Transcreation & Dubbing (Zero Metadata Generation)
+1. **Direct Viral Translation Crafted**:
+   - Transcreated all 29 blocks of raw Chinese transcript into natural, high-retention conversational Hindi with speed-to-value hook, curiosity resets, and ElevenLabs vocal directives (`[excited]`, `[shocked]`, `[curious]`, `[gasps]`).
+   - Saved directly to [output/subtitles/视频 - 舌尖风味·美食 - 全国只有在新疆才能吃到正宗的烤全_hindi.srt](file:///c:/Users/shahi/OneDrive/Desktop/douyin/output/subtitles/视频%20-%20舌尖风味·美食%20-%20全国只有在新疆才能吃到正宗的烤全_hindi.srt).
+   - Enforced zero metadata generation via `--no-metadata` flag.
+2. **TTS Synthesis & Video Mux**:
+   - Synthesized speech across all 29 blocks using **ElevenLabs v4 Turbo** (`roger` @ 1.0x).
+   - Audio mastered to broadcast standard (-14 LUFS) with movie scene timestamps and 0s tail silence.
+   - Word-synchronized ASS captions rendered on Reels blurred canvas (`1080x1920`).
+   - Final Video Output: [output/Xinjiang Authentic Whole Lamb Roast.mp4](file:///c:/Users/shahi/OneDrive/Desktop/douyin/output/Xinjiang%20Authentic%20Whole%20Lamb%20Roast.mp4) (39 chars, 78.83 MB, strictly compliant with $\le 49$ characters cap).
+
+### [2026-11-24] Added ElevenLabs to Production Requirements
+1. **Requirements Update**:
+   - Added `elevenlabs>=2.79.0` to [requirements.txt](file:///c:/Users/shahi/OneDrive/Desktop/douyin/requirements.txt) to guarantee runtime availability of `dubbing_studio/tts_elevenlabs.py`.
+
+### [2026-11-24] End-to-End Pipeline Dubbing with ElevenLabs & Movie Mode
+1. **Target Video Dubbed**:
+   - URL: `https://v.douyin.com/krWueVL7Uho/` (Video ID: `7688658042430229760`, clean slug: `视频 - 舌尖风味·美食 - 全国只有在新疆才能吃到正宗的烤全`).
+   - Style: `--movie` (Movie explanation style: edge-caption crop, auto-Reels blurred canvas, 1.35x BGM mixing, bold word captions).
+   - Voice Engine: **ElevenLabs v4 Turbo** (`roger` @ 1.0x).
+   - Transcreation Model: `gemini-3.5-flash` with instant Wave 1 parallel race.
+2. **Execution Milestones**:
+   - Audio Transcription: 29 blocks transcribed via Faster-Whisper on GPU.
+   - Script Transcreation: Hindi transcreation generated via `gemini-3.5-flash` with zero 503 stalls.
+   - Audio Synthesis: Synthesized 29 blocks via ElevenLabs API pool across active keys.
+   - Movie Pacing & Master: Speech span 108.07s / Original video 108.09s, uniform scaling 1.0053x, zero compaction, broadcast mastered at -14 LUFS.
+   - Video Transformation: Rendered Reels blurred background (`1080x1920`) with 1.40x foreground and word-synced ASS captions.
+   - Final File Renaming: Obeyed strict `<= 49` char hard cap per `AGENTS.md`: `They Buried A Whole Lamb Underground.mp4` (40 chars, 78.28 MB).
+   - Metadata Verified: High-CTR YouTube metadata generated (<5,000 char description, high-volume tags, #shorts).
+
+### [2026-11-24] End-to-End Pipeline Dubbing with ElevenLabs & Movie Mode
+1. **Target Video Dubbed**:
+   - URL: `https://v.douyin.com/krWueVL7Uho/` (Video ID: `7688658042430229760`, clean slug: `视频 - 舌尖风味·美食 - 全国只有在新疆才能吃到正宗的烤全`).
+   - Style: `--movie` (Movie explanation style: edge-caption crop, auto-Reels blurred canvas, 1.35x BGM mixing, bold word captions).
+   - Voice Engine: **ElevenLabs v4 Turbo** (`roger` @ 1.0x).
+   - Transcreation Model: `gemini-3.5-flash` with instant Wave 1 parallel race.
+2. **Execution Milestones**:
+   - Audio Transcription: 29 blocks transcribed via Faster-Whisper on GPU.
+   - Script Transcreation: Hindi transcreation generated via `gemini-3.5-flash` with zero 503 stalls.
+   - Audio Synthesis: Synthesized 29 blocks via ElevenLabs API pool across active keys.
+   - Movie Pacing & Master: Speech span 108.07s / Original video 108.09s, uniform scaling 1.0053x, zero compaction, broadcast mastered at -14 LUFS.
+   - Video Transformation: Rendered Reels blurred background (`1080x1920`) with 1.40x foreground and word-synced ASS captions.
+   - Final File Renaming: Obeyed strict `<= 49` char hard cap per `AGENTS.md`: `They Buried A Whole Lamb Underground.mp4` (40 chars, 78.28 MB).
+   - Metadata Verified: High-CTR YouTube metadata generated (<5,000 char description, high-volume tags, #shorts).
+
 ### [2026-11-24] Translator Parallel Race Alignment for Gemini 3.5 Models
 1. **Root Cause Diagnosis**:
    - In `dubbing_studio/translator.py`, `_transcreate_single_pass` had hardcoded `race_waves` starting with `['gemini-4-hydrogen', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash']`.
@@ -2082,3 +2166,175 @@ This document logs all architectural decisions, code changes, pipeline updates, 
   1. Added an explicit handler for the popup menu: immediately clicks `"Settings and privacy"` (`button:has-text('Settings and privacy')`) after clicking the gear icon.
   2. Added direct navigation fallback to `https://www.instagram.com/accounts/settings/?hl=en` if Accounts Center is not immediately reachable from the dropdown.
   3. Ensured no blocking modal dialog is left unhandled on the profile screen.
+
+## Session: 2026-11-24 - Profile & Proxy Persistence Audit and Launcher Alignment
+- **Rationale**: User inquired about profile storage and whether opening saved Facebook & Metricool profiles automatically routes through the proxy they were registered with.
+- **Audit Findings**:
+  1. Profiles on disk do not store proxy credentials inside `prefs.js` (Camoufox injects proxies dynamically in runtime memory). Opening profiles via standard desktop browser directly leaks the user's host IP.
+  2. Oxylabs residential proxies (`sesstime-30`) expire their 30-minute lock over time; reconnecting with the saved credentials keeps identical gateway, user pool, and country-level routing (`-cc-in`), while Oxylabs allocates a fresh residential exit IP.
+  3. `tools/open_fb_profile.mjs` was checking `output/profiles facebook/` instead of fallback to unified `output/profiles/`.
+  4. `tools/metricool_camoufox.mjs` defaulted to `output/profiles metricool/` and did not auto-resolve saved proxies from the Facebook accounts registry.
+- **Files Modified**:
+  - `tools/open_fb_profile.mjs`: Added fallback resolution to check `output/profiles/<profileName>` if `output/profiles facebook/<profileName>` does not exist.
+  - `tools/metricool_camoufox.mjs`: Added smart profile directory detection (`output/profiles/` -> `output/profiles metricool/`) and automatic lookup of saved proxies from `output/facebook_registered_accounts.json` when `--proxy` is omitted.
+
+## Session: 2026-11-24 - Fixed Camoufox Module Import Path in `tools/open_fb_profile.mjs`
+- **Rationale**: User attempted `node tools/open_fb_profile.mjs --email zhoejacorion1704@outlook.in` and hit `ERR_MODULE_NOT_FOUND` due to hardcoded legacy path `C:/Users/rudra/...`.
+- **Changes**:
+  - `tools/open_fb_profile.mjs`: Updated imports for `Camoufox` and `FingerprintGenerator` to use local `./node_modules/...` relative paths.
+  - `tools/refresh_facebook_session.mjs`: Updated legacy hardcoded path to `./node_modules/...`.
+- **Outcome**: `node -c tools/open_fb_profile.mjs` and initialization tests passed cleanly.
+
+## Session: 2026-11-24 - Fixed Silent Exit and Headed Launch for `tools/open_fb_profile.mjs`
+- **Root Cause**:
+  1. Default shell Node is v20.18.1. `camoufox-js` relies on SQLite native features (`--experimental-sqlite`) available in Node 22 (`%LOCALAPPDATA%\Programs\NodeJS\node22\node.exe`). When run under Node 20 without `--experimental-sqlite`, the native SQLite call failed with Windows `0xC0000005` (access violation) and silently terminated.
+  2. Stale `parent.lock` in the profile directory blocked Firefox re-launch.
+  3. `camoufoxLaunchOverrides()` was missing from the configuration.
+  4. Context closure waiting logic threw on `browser.on("close")`.
+- **Changes Applied**:
+  - `tools/open_fb_profile.mjs`: Added transparent auto-respawn under Node 22 with `--experimental-sqlite` if executed from Node < 22; added stale lock cleanup (`parent.lock`, `lock`, `.parentlock`); integrated `camoufoxLaunchOverrides()`; fixed context and page close handlers.
+  - Created `open_fb_profile.bat` in root for convenience.
+- **Verification**: Executed `node tools/open_fb_profile.mjs --email zhoejacorion1704@outlook.in`. Successfully respawned, loaded profile `zhoejacorion1704`, loaded frozen persona/fingerprint, attached saved Oxylabs proxy, and launched the headed browser live onto the user's desktop.
+
+## Session: 2026-11-24 - Created Dedicated Custom BGM Directory
+- **Rationale**: User requested a dedicated folder for custom royalty-free background music to be used in rendering pipelines.
+- **Changes**:
+  - Created [bgm/](file:///c:/Users/shahi/OneDrive/Desktop/douyin/bgm/) folder in workspace root.
+  - Added [bgm/README.md](file:///c:/Users/shahi/OneDrive/Desktop/douyin/bgm/README.md) with supported formats (`.mp3`, `.wav`, `.m4a`, etc.) and mixing guidelines.
+
+## Session: 2026-11-24 - Updated ElevenLabs Key Pool with Fresh Active Keys
+- **Rationale**: User supplied 2 fresh ElevenLabs API keys and requested removing exhausted/dead keys from the active pool.
+- **Verification**:
+  - Tested both keys against the ElevenLabs TTS API (`v1/text-to-speech/JBFqnCBsd6RMkjVDRZzb` with `eleven_multilingual_v2`). Both keys verified healthy, active, and generated test audio without error.
+- **Changes Applied**:
+  - [.env](file:///c:/Users/shahi/OneDrive/Desktop/douyin/.env):
+    - Replaced the 31 exhausted keys with the 2 fresh active keys:
+      - Primary `ELEVENLABS_API_KEY`: `sk_c7e63fa61fe116766646e1e2db531d7df7fb2116f45f7601`
+      - Pool `ELEVENLABS_API_KEYS`: `sk_c7e63fa61fe116766646e1e2db531d7df7fb2116f45f7601,sk_d76b1c86d28f48a9c76f501c389ced8f5134060505a38504`
+- **Pool Validation**:
+  - `dubbing_studio.key_pool`: Confirmed `2 active` ElevenLabs keys in round-robin rotator with 0 dead keys.
+
+## Session: 2026-11-24 - Dubbed Douyin Video 7697874966884273435 via Main Pipeline with ElevenLabs TTS & Movie Flag
+- **Source Video**: `https://www.douyin.com/video/7697874966884273435` (ID: 7697874966884273435, WWII Yugoslav partisan war movie recap).
+- **Pipeline Execution**:
+  1. Downloaded video via `DownloaderAPI` -> `input/2026-10-20 06.31.00-视频-熊猫观影-#电影解说 #战争电影.mp4`.
+  2. Transcribed video audio with Faster-Whisper -> 28 blocks in `output/subtitles/2026-10-20 06.31.00-视频-熊猫观影-#电影解说 #战争电影_raw.srt`.
+  3. Translated & transcreated directly into authentic viral Hindi script following `creative-writing-skills` and `movie_pillar_script_guide.md` (no external Gemini API calls; avoided loanword cliches).
+  4. Executed `pipeline.py` with `--elevenlabs`, `--movie`, and `--no-metadata`.
+  5. Synthesized 28 blocks via ElevenLabs v4 Turbo (roger) using the fresh active key pool in round-robin.
+  6. Muxed with Reels vertical 1080x1920 blurred layout, OCR edge crop, and word-synced ASS captions.
+  7. Enforced `<= 49` character filename cap per `AGENTS.md` rules -> renamed to `视频 - 熊猫观影.mp4`.
+- **Outputs**:
+  - Local Final: [output/视频 - 熊猫观影.mp4](file:///c:/Users/shahi/OneDrive/Desktop/douyin/output/%E8%A7%86%E9%A2%91%20-%20%E7%86%8A%E7%8C%AB%E8%A7%82%E5%BD%B1.mp4) (134.60s, 1080x1920)
+  - Google Drive: `G:\My Drive\douyin\final_videos\视频 - 熊猫观影.mp4`
+  - Hindi SRT: [output/subtitles/视频 - 熊猫观影_hindi.srt](file:///c:/Users/shahi/OneDrive/Desktop/douyin/output/subtitles/%E8%A7%86%E9%A2%91%20-%20%E7%86%8A%E7%8C%AB%E8%A7%82%E5%BD%B1_hindi.srt)
+
+
+## Session: 2026-11-24 - Dubbed Douyin Video 7685053145256365363 (English Transcreation + ElevenLabs Movie Mode)
+- **Source Video**: `https://www.douyin.com/video/7685053145256365363` (WWII dramatic war movie recap: Soviet blind soldier and girl).
+- **Execution & Key Highlights**:
+  1. **Transcription & Constraints**:
+     - Extracted 55 subtitle blocks using Faster-Whisper.
+     - Generated time-budgeted constraint tags matching exact audio scene durations.
+  2. **Direct English Self-Transcreation (Zero Gemini API Calls)**:
+     - Followed `ENGLISH_SYSTEM_PROMPT` and `MOVIE_PILLAR_DIRECTIVE` directly.
+     - Enforced speed-to-value hook (no fluff intro), 6th-grade active-voice vocabulary, and decisive twist payoff ending (*"Holding the wrong girl"*).
+     - Saved English SRT: [output/subtitles/视频 - 觅辰电影_english.srt](file:///c:/Users/shahi/OneDrive/Desktop/douyin/output/subtitles/%E8%A7%86%E9%A2%91%20-%20%E8%A7%85%E8%BE%B0%E7%94%B5%E5%BD%B1_english.srt).
+  3. **Voiceover & Audio-Video Alignment**:
+     - Synthesized all 55 blocks using ElevenLabs v4 Turbo (`roger` voice) in round-robin using active key pool.
+     - Executed Movie Mode with fast OCR Chinese caption crop, 9:16 portrait conversion (`1080x1920`) with blurred cinematic side-bars, and 3-stem mixing.
+     - Burned non-overlapping horizontal ASS captions (2–3 word snappy chunks, Montserrat ExtraBold, black outline & shadow).
+  4. **Strict Filename Cap Compliance (`AGENTS.md`)**:
+     - Final video title: `"He Realized He Saved The WRONG Girl Too Late.mp4"` (48 characters $\le 49$).
+- **Outputs**:
+  - Local Final Video: [output/He Realized He Saved The WRONG Girl Too Late.mp4](file:///c:/Users/shahi/OneDrive/Desktop/douyin/output/He%20Realized%20He%20Saved%20The%20WRONG%20Girl%20Too%20Late.mp4) (87.98s | 57.8 MB)
+  - Google Drive Backup: `G:\My Drive\douyin\final_videos\He Realized He Saved The WRONG Girl Too Late.mp4`
+  - Subtitle ASS: `output/audio_stems/block_align_视频 - 觅辰电影_english_movie/2026-09-14 07.17.00-视频-觅辰电影-#电影解说 #影视解说 #战争电影_aligned.ass`
+
+
+## Session: 2026-11-25 - Dubbed Douyin Video 7709439671924120761 (English Viral Short Style + ElevenLabs + Movie Mode)
+- **Source Video**: `https://www.douyin.com/jingxuan?modal_id=7709439671924120761` (ID: `7709439671924120761`, SpongeBob & Mr. Krabs weekend yacht/Floating Krusty Krab animation recap).
+- **Execution**:
+  1. Downloaded video via `DownloaderAPI` -> `input/2026-11-18 14.53.22-视频-芊说动漫-蟹老板周末也没放过俩冤种 #海绵宝宝 #二次元 #动画 #动漫解说.mp4` (210.44s).
+  2. Transcribed Chinese audio locally via `Transcriber` (`large-v3-turbo` on CPU int8) -> 47 blocks in `output/subtitles/视频 - 芊说动漫 - 蟹老板周末也没放过俩冤种_raw.srt`.
+  3. Performed direct English viral transcreation (zero Gemini API key calls for translation) following `ENGLISH_SYSTEM_PROMPT` and `MOVIE_PILLAR_DIRECTIVE` -> saved to [output/subtitles/视频 - 芊说动漫 - 蟹老板周末也没放过俩冤种_english.srt](file:///c:/Users/shahi/OneDrive/Desktop/douyin/output/subtitles/%E8%A7%86%E9%A2%91%20-%20%E8%8A%8A%E8%AF%B4%E5%8A%A8%E6%BC%AB%20-%20%E8%9F%B9%E8%80%81%E6%9D%BF%E5%91%A8%E6%9C%AB%E4%B9%9F%E6%B2%A1%E6%94%BE%E8%BF%87%E4%BF%A9%E5%86%A4%E7%A7%8D_english.srt).
+  4. Ran `pipeline.py --lang English --movie --tts elevenlabs --voice roger`; pipeline detected cached SRT and skipped Gemini translation, synthesizing all 47 blocks with ElevenLabs v4 Turbo (`roger`).
+  5. Remuxed audio to 2-channel stereo AAC (`44.1 kHz, 217-256 kbps`) and stripped dangling stopwords (`On The`) to comply with `AGENTS.md` `<= 49` char filename cap -> `When Your Boss Tricks You Into Working.mp4` (42 chars).
+  6. Visually verified subtitle rendering via `krabs_frame_10.png` and `krabs_frame_100.png` (crisp horizontal 2–3 word captions, zero vertical stacking).
+- **Outputs**:
+  - Local Final Video: [output/When Your Boss Tricks You Into Working.mp4](file:///c:/Users/shahi/OneDrive/Desktop/douyin/output/When%20Your%20Boss%20Tricks%20You%20Into%20Working.mp4) (210.43s | 1080x1920 | 107.78 MB | Stereo AAC)
+  - Google Drive Backup: `G:\My Drive\douyin\final_videos\When Your Boss Tricks You Into Working.mp4`
+- **Follow-up (Emotional Tags Re-dub)**:
+  - Added ElevenLabs v4 inline performance tags (`[sighs]`, `[curious]`, `[chuckles]`, `[excited]`, `[shocked]`, `[gasps]`, `[laughs]`, `[angry]`, `[pause]`, and 1 `[whispers]`) per `tag_instructions` in `dubbing_studio/translator.py`.
+  - Re-ran `pipeline.py` with `roger` (`--movie --lang English --tts elevenlabs`), remuxed to 2-channel stereo AAC, and updated [output/When Your Boss Tricks You Into Working.mp4](file:///c:/Users/shahi/OneDrive/Desktop/douyin/output/When%20Your%20Boss%20Tricks%20You%20Into%20Working.mp4) and Google Drive.
+
+
+## Session: 2026-11-25 - Dubbed Douyin Video 7709057785745497018 (English Viral + Emotional Tags + Brian Voice + 3-Stem SFX)
+- **Source Video**: `https://www.douyin.com/video/7709057785745497018` (ID: `7709057785745497018`, SpongeBob "Face Freeze" melted-face animation recap, `93.97s`).
+- **Execution**:
+  1. Downloaded video via `DownloaderAPI` -> `input/2026-11-17 14.11.26-视频-芊说动漫-比奇堡F4之僵脸怪 #海绵宝宝 #动漫 #二次元 #动画.mp4`.
+  2. Transcribed Chinese audio locally via `Transcriber` (`large-v3-turbo` on CPU int8) -> 21 blocks in `output/subtitles/视频 - 芊说动漫 - 比奇堡F4之僵脸怪_raw.srt`.
+  3. Performed direct English viral transcreation (zero Gemini API key calls for translation) following `ENGLISH_SYSTEM_PROMPT`, `MOVIE_PILLAR_DIRECTIVE`, and ElevenLabs `tag_instructions` (`[curious]`, `[shocked]`, `[chuckles]`, `[whispers]`, `[sighs]`, `[gasps]`, `[angry]`, `[laughs]`, `[pause]`) -> saved to [output/subtitles/视频 - 芊说动漫 - 比奇堡F4之僵脸怪_english.srt](file:///c:/Users/shahi/OneDrive/Desktop/douyin/output/subtitles/%E8%A7%86%E9%A2%91%20-%20%E8%8A%8A%E8%AF%B4%E5%8A%A8%E6%BC%AB%20-%20%E6%AF%94%E5%A5%87%E5%A0%A1F4%E4%B9%8B%E5%83%B5%E8%84%B8%E6%80%AA_english.srt).
+  4. Ran `pipeline.py --lang English --movie --tts elevenlabs --voice brian`:
+     - Meta HTDemucs v4 separated `sfx.wav`, `music.wav`, `speech.wav`.
+     - Synthesized all 21 blocks with **ElevenLabs v4 Turbo (`brian`)**.
+     - Dynamic Mastering mixed `-14 LUFS` `brian` voiceover + original `sfx.wav` Foley.
+     - Burned 109 clean non-overlapping horizontal ASS captions in 9:16 Reels blurred layout.
+  5. Remuxed audio to 2-channel stereo AAC and cleaned mid-word truncation -> [output/When Making A Funny Face Turns.mp4](file:///c:/Users/shahi/OneDrive/Desktop/douyin/output/When%20Making%20A%20Funny%20Face%20Turns.mp4) (34 chars `<= 49`).
+- **Outputs**:
+  - Local Final Video: [output/When Making A Funny Face Turns.mp4](file:///c:/Users/shahi/OneDrive/Desktop/douyin/output/When%20Making%20A%20Funny%20Face%20Turns.mp4) (`94.00s` | `1080x1920` | Stereo AAC)
+  - Google Drive Backup: `G:\My Drive\douyin\final_videos\When Making A Funny Face Turns.mp4`
+
+
+## Session: 2026-11-25 - Installed Demucs & Populated Movie Explanation BGM Library
+- **Audio Separation Fix**:
+  - Installed `demucs==4.1.0` in `.venv` so `AudioStemSeparator` (Meta HTDemucs v4) runs cleanly instead of falling back to 1-stem mastering.
+- **BGM Library Populated**:
+  - Created [`assets/background_audio/movie explanation/`](file:///c:/Users/shahi/OneDrive/Desktop/douyin/assets/background_audio/movie%20explanation/) (the primary directory checked by `block_aligner.py` in `--movie` mode) and downloaded 6+ widely-used movie explanation / recap BGM tracks from Incompetech (Kevin MacLeod): `Sneaky_Snitch.mp3`, `Investigations.mp3`, `Scheming_Weasel_faster.mp3`, `Monkeys_Spinning_Monkeys.mp3`, `The_Descent.mp3`, `Anxiety.mp3`, `Marty_Gots_a_Plan.mp3`.
+- **Auto-Sync Fix (`dubbing_studio/video_registry.py`)**:
+  - Updated `VideoRegistry._after_write()` to ensure project root is on `sys.path`, enable `sync_events=True` alongside `sync_videos=True, sync_movies=True`, and log warnings instead of silently swallowing exceptions (`except Exception: pass`).
+  - Verified full parity between SQLite (`162` videos, `4` movies, `354` events) and Supabase.
+
+
+## Session: 2026-11-25 - Dubbed Douyin Video 7709176146998431018 & Fixed TikTokDownloader `tools` Shadowing in Supabase Auto-Sync
+- **Source Video**: `https://v.douyin.com/bejWY4HxZcI/` (`7709176146998431018`, "3 Laws Nobody Has Ever Been Convicted Of", `193.21s`).
+- **Execution**:
+  1. Downloaded video via `DownloaderAPI` and transcribed 54 blocks locally with `Transcriber` (`large-v3-turbo`).
+  2. Performed direct English viral transcreation (zero Gemini API calls) with ElevenLabs v4 inline emotional tags (`[curious]`, `[chuckles]`, `[shocked]`, `[gasps]`, `[whispers]`, `[laughs]`, `[sighs]`, `[pause]`) -> [output/subtitles/视频 - 吉大人 - 有没有哪种刑法是立法从出来之后就_english.srt](file:///c:/Users/shahi/OneDrive/Desktop/douyin/output/subtitles/%E8%A7%86%E9%A2%91%20-%20%E5%90%89%E5%A4%A7%E4%BA%BA%20-%20%E6%9C%89%E6%B2%A1%E6%9C%89%E5%93%AA%E7%A7%8D%E5%88%91%E6%B3%95%E6%98%AF%E7%AB%8B%E6%B3%95%E4%BB%8E%E5%87%BA%E6%9D%A5%E4%B9%8B%E5%90%8E%E5%B0%B1_english.srt).
+  3. Ran `pipeline.py --lang English --movie --tts elevenlabs --voice brian`:
+     - Meta HTDemucs v4 separated `sfx.wav` (`16.25 MB`).
+     - Dynamic 3-Stem Mastering mixed `-14 LUFS` `brian` voiceover + original `sfx.wav` + `Sneaky_Snitch.mp3` BGM (`-23 LUFS @ 1.35x`).
+     - Burned 226 crisp horizontal ASS captions (`laws_frame_15.png` verified).
+     - Remuxed to 2-channel stereo AAC and cleaned filename (`44 chars <= 49`) -> [output/When Criminal Laws Have Zero Convictions.mp4](file:///c:/Users/shahi/OneDrive/Desktop/douyin/output/When%20Criminal%20Laws%20Have%20Zero%20Convictions.mp4) (`95.92 MB`) + Google Drive.
+  4. **Fixed Root Cause of Auto-Sync Failure**:
+     - Caught `[Registry] Warning: Supabase auto-sync failed (attempted relative import beyond top-level package)` during `pipeline.py` runs: `DownloaderAPI` (`TikTokDownloader`) shadows `tools` in `sys.modules`.
+     - Updated `VideoRegistry._after_write()` in [`dubbing_studio/video_registry.py`](file:///c:/Users/shahi/OneDrive/Desktop/douyin/dubbing_studio/video_registry.py#L861-L876) to evict shadowed `tools` entries and load `tools/sync_registry_to_supabase.py` by explicit file path via `importlib.util`.
+     - Synced all `163` videos and `4` movies to Supabase.
+- **Continuous ElevenLabs Prosody Fix (`dubbing_studio/tts_elevenlabs.py`, `dubbing_studio/block_aligner.py`)**:
+  - Identified why ElevenLabs voice style/pitch reset at every block boundary: `synthesize_single_block()` forcibly appended `.` to every block (even mid-sentence continuations) and omitted `previous_text` / `next_text` context parameters.
+  - Updated `ElevenLabsTTS.synthesize_single_block()` to accept `previous_text` and `next_text`, pass them to `client.text_to_speech.convert()`, and only append a closing `.` when `next_text` is absent.
+  - Updated `_synth_elevenlabs_block()` in `dubbing_studio/block_aligner.py` to supply neighboring `blocks[i-2]` / `blocks[i]` text context and include it in the block cache hash.
+
+
+## Session: 2026-11-25 - Batch Video #1 Complete (7622883287685516578) — Paused for User Review
+- **Source Video**: `https://www.douyin.com/video/7622883287685516578` (ID: `7622883287685516578`, "Why Are Chemists Secretly Terrifying?", `196.53s`).
+- **Execution**:
+  1. Transcribed 50 blocks locally (`large-v3-turbo`) and transcreated viral English script with ElevenLabs emotional tags -> [output/subtitles/视频 - 吉大人 - 为什么化学家没有物理学家出名 为_english.srt](file:///c:/Users/shahi/OneDrive/Desktop/douyin/output/subtitles/%E8%A7%86%E9%A2%91%20-%20%E5%90%89%E5%A4%A7%E4%BA%BA%20-%20%E4%B8%BA%E4%BB%80%E4%B9%88%E5%8C%96%E5%AD%A6%E5%AE%B6%E6%B2%A1%E6%9C%89%E7%89%A9%E7%90%86%E5%AD%A6%E5%AE%B6%E5%87%BA%E5%90%8D%20%E4%B8%BA_english.srt).
+  2. Ran `pipeline.py --lang English --movie --tts elevenlabs --voice brian` with continuous `previous_text`/`next_text` prosody, Dynamic 3-Stem Mastering (`brian` voiceover + Demucs `sfx.wav` + `Scheming_Weasel_faster.mp3` BGM), and Supabase auto-sync.
+  3. Remuxed to 2-channel stereo AAC (`76.3 MB`, 42 chars `<= 49`) -> [output/Why Are Chemists Secretly Terrifying 😱.mp4](file:///c:/Users/shahi/OneDrive/Desktop/douyin/output/Why%20Are%20Chemists%20Secretly%20Terrifying%20%F0%9F%98%B1.mp4) + Google Drive.
+  4. **Quota Note**: 1 of the 2 ElevenLabs keys hit `quota_exceeded` during synthesis (`1/2` active keys remaining). Paused before processing the remaining 19 URLs per user instruction.
+- **Eliminated Inter-Block Audio Breaks (`dubbing_studio/block_aligner.py`)**:
+  - Tightened `trim_audio_silence` (`threshold=0.015`, `pad_samples=4ms` instead of `10ms`) on ElevenLabs blocks.
+  - Updated `_plan_movie_timeline()` to enforce `0ms` gap whenever the preceding block continues mid-sentence (no `.`/`!`/`?`/`।`) and reduced the sentence-end breath gap from `60ms` to `30ms`.
+- **Root-Cause Fix for 400ms–770ms Inter-Block Breaks (`dubbing_studio/block_aligner.py`)**:
+  - Identified that `_plan_movie_timeline()` used `max(curr + req_gap, orig_start)` unconditionally—so whenever a ~3.4s English block was shorter than Whisper's 3.88s window, it jumped forward to `orig_start`, injecting `350ms–770ms` of dead silence mid-sentence even when `orig_gap == 0.00s`.
+  - Added `_next_start()` to only anchor forward to `orig_start` when the original video has a genuine silent cutaway (`orig_gap > 0.35s`), otherwise placing blocks continuously at `curr + req_gap` (`0.00s` mid-sentence, `0.03s` at sentence end).
+  - Generated continuous 20s+ voice-only sample: [tests/test_artifacts/sample_20s_voice_only.wav](file:///c:/Users/shahi/OneDrive/Desktop/douyin/tests/test_artifacts/sample_20s_voice_only.wav).
+
+
+## Session: 2026-11-26 - Batch 1 Complete (20/20 Videos) & Batch 2 Staging Started
+- **Batch 1 (`batch1_20261125`)**:
+  - Completed all **20 / 20** English movie-mode dubbed videos (`elevenlabs` default voice `roger`, zero Gemini API calls, 2-channel stereo AAC, continuous block flow with zero inter-block breaks, `<= 49` char filenames).
+  - Compiled master `output/batch1_20261125/metadata/metadata.json`, copied all 20 `.mp4`s + `metadata.json` to Google Drive (`G:\My Drive\douyin\final_videos\batch1_20261125\`), and synced SQLite -> Supabase (`184/184` videos, `8/8` movies).
+- **Batch 2 (`batch2_20261125`)**:
+  - Started download & local Whisper transcription of 21 URLs into `input/batch2_20261125/` and `output/batch2_20261125/subtitles/`.

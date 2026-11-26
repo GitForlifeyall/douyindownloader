@@ -860,10 +860,34 @@ class VideoRegistry:
 
         if os.getenv("VIDEO_REGISTRY_NO_SUPABASE", "").strip() not in ("1", "true", "True"):
             try:
-                from tools.sync_registry_to_supabase import sync_registry
-                sync_registry(self.db_path, sync_videos=True, sync_movies=True, sync_events=False)
-            except Exception:
-                pass
+                import sys
+                import types
+                import importlib.util
+                root_dir = Path(__file__).resolve().parent.parent
+                root_str = str(root_dir)
+                if not sys.path or sys.path[0] != root_str:
+                    sys.path.insert(0, root_str)
+                # Guard against TikTokDownloader/src/tools (__init__.py) shadowing namespace package 'tools'
+                tools_mod = sys.modules.get("tools")
+                if tools_mod is not None and not str(getattr(tools_mod, "__file__", "") or "").startswith(root_str):
+                    for mod_name in [k for k in list(sys.modules.keys()) if k == "tools" or k.startswith("tools.")]:
+                        sys.modules.pop(mod_name, None)
+                if "tools" not in sys.modules:
+                    pkg = types.ModuleType("tools")
+                    pkg.__path__ = [str(root_dir / "tools")]
+                    sys.modules["tools"] = pkg
+                if "tools.supabase_logger" not in sys.modules:
+                    supa_spec = importlib.util.spec_from_file_location("tools.supabase_logger", str(root_dir / "tools" / "supabase_logger.py"))
+                    supa_mod = importlib.util.module_from_spec(supa_spec)
+                    sys.modules["tools.supabase_logger"] = supa_mod
+                    supa_spec.loader.exec_module(supa_mod)
+                sync_file = root_dir / "tools" / "sync_registry_to_supabase.py"
+                spec = importlib.util.spec_from_file_location("tools.sync_registry_to_supabase", str(sync_file))
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                mod.sync_registry(self.db_path, sync_videos=True, sync_movies=True, sync_events=False)
+            except Exception as exc:
+                print(f"[Registry] Warning: Supabase auto-sync failed ({exc})")
 
 
 _DEFAULT_REGISTRY: Optional[VideoRegistry] = None
